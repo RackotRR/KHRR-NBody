@@ -304,15 +304,14 @@ int main(int argc, char * argv[])
 {
 	FILE *outf;
 	real r, vr, vfi, fi;
-  char str[24];
+  	char str[24];
 
 	//----GPU device------------------------------------------------
 	int deviceCount, nGPU;
 	cudaDeviceProp prop;
 	int j, nthr, i;
 
-	#pragma omp parallel
-	{nthr = omp_get_num_threads(); }
+	nthr = omp_get_num_threads();
 	printf("Threads_CPU=%d\n", nthr);
 
 	cudaGetDeviceCount(&deviceCount);
@@ -322,43 +321,46 @@ int main(int argc, char * argv[])
 		printf("Id_GPU = %d, Name_GPU = %s\n", i, prop.name);
 	}
 
-  char name[FILENAME_MAX];
+  	char name[FILENAME_MAX];
 	outf = fopen("__GPUs.ini", "r");
-		fscanf(outf, "%d  %[^\n]", &nGPU, name);
+	fscanf(outf, "%d  %[^\n]", &nGPU, name);
+
     int *deviceId = new int[nGPU];
-	  for (i = 0; i < nGPU; i++) {
-      fscanf(outf, "%d  %[^\n]", &deviceId[i], name);
-		  if (deviceId[i] > deviceCount - 1)
-      {
-			  printf("\n Net takogo nomera device GPU"); return 0;
-		  }
-	  }
+	for (i = 0; i < nGPU; i++) {
+		fscanf(outf, "%d  %[^\n]", &deviceId[i], name);
+		if (deviceId[i] > deviceCount - 1) {
+			printf("\n Net takogo nomera device GPU");
+			return 0;
+		}
+	}
 	fclose(outf);
 
-	for (i = 0; i < nGPU; i++) printf("deviceId[%d] = %d\n", i, deviceId[i]);
+	for (i = 0; i < nGPU; i++)
+		printf("deviceId[%d] = %d\n", i, deviceId[i]);
+
 	int can_access_peer, itmp;
-	for (i = 0; i < nGPU; i++){
+	for (i = 0; i < nGPU; i++) {
 		cudaSetDevice(deviceId[i]);
-		for (j = 0; j < nGPU; j++){
-			if (j != i){
+		for (j = 0; j < nGPU; j++) {
+			if (j != i) {
 				cudaDeviceCanAccessPeer(&can_access_peer, deviceId[i], deviceId[j]);
 				printf("can_access_peer=%d, %d, %d\n", can_access_peer, deviceId[i], deviceId[j]);
 				if (can_access_peer == 0) {
 					printf("ERROR! -- can_access_peer = 0 for deviceId = %d  and  deviceId = %d\n", deviceId[i], deviceId[j]);
-					printf("Press any key + Enter\n"); 
-					scanf("%d", &itmp); 
+					printf("Press any key + Enter\n");
+					scanf("%d", &itmp);
 					exit(0);
 				}
 			}
 		}
 	}
 
-	for (i = 0; i < nGPU; i++)
-  {
+	for (i = 0; i < nGPU; i++) {
 		cudaSetDevice(deviceId[i]);
-		for (j = 0; j < nGPU; j++)
-    {
-			if (j != i) cudaDeviceEnablePeerAccess(deviceId[j], 0);
+		for (j = 0; j < nGPU; j++) {
+			if (j != i) {
+				cudaDeviceEnablePeerAccess(deviceId[j], 0);
+			}
 		}
 	}
 
@@ -375,36 +377,46 @@ int main(int argc, char * argv[])
   //----start_galaxies---------------------------------------------------------------------------
 	outf = fopen("__start_galaxies.ini", "r");
   	fscanf(outf, "%d %[^\n]", &M_glx, name);
-    N_s = new int[M_glx]; N_dm = new int[M_glx];
-    Mass_s = new double[M_glx]; Mass_dm = new double[M_glx];
-    mp_s = new double[M_glx]; mp_dm = new double[M_glx];
-    X_glx = new double[M_glx]; Y_glx = new double[M_glx]; Z_glx = new double[M_glx];
-    Vx_glx = new double[M_glx]; Vy_glx = new double[M_glx]; Vz_glx = new double[M_glx];
+    N_s = new int[M_glx];
+	N_dm = new int[M_glx];
+    Mass_s = new double[M_glx];
+	Mass_dm = new double[M_glx];
+    mp_s = new double[M_glx];
+	mp_dm = new double[M_glx];
+    X_glx = new double[M_glx];
+	Y_glx = new double[M_glx];
+	Z_glx = new double[M_glx];
+    Vx_glx = new double[M_glx];
+	Vy_glx = new double[M_glx];
+	Vz_glx = new double[M_glx];
     alpha_glx = new double[M_glx];
-		eps_s = new double[M_glx]; eps_dm = new double[M_glx];
-    for(k=0; k<M_glx; k++){
-			fscanf(outf, "%d %[^\n]", &k_glx, name);
-      fscanf(outf, "%d,%d %[^\n]", &N_s[k],&N_dm[k], name);
-      fscanf(outf, "%lf,%lf %[^\n]", &Mass_s[k],&Mass_dm[k], name);
-      fscanf(outf, "%lf,%lf %[^\n]", &eps_s[k],&eps_dm[k], name);
-      fscanf(outf, "%lf %[^\n]", &alpha_glx[k], name);
-      fscanf(outf, "%lf,%lf,%lf %[^\n]", &X_glx[k],&Y_glx[k],&Z_glx[k], name);
-      fscanf(outf, "%lf,%lf,%lf %[^\n]", &Vx_glx[k],&Vy_glx[k],&Vz_glx[k], name);
-      if(Mass_s[k]==0.0 || N_s[k]==0) {Mass_s[k]=0.0; N_s[k]=0;}
-      if(Mass_dm[k]==0.0 || N_dm[k]==0) {Mass_dm[k]=0.0; N_dm[k]=0;}
-      mp_s[k] = (N_s[k]>0) ? Mass_s[k]/N_s[k] : 0.0;
-      mp_dm[k] = (N_dm[k]>0) ? Mass_dm[k]/N_dm[k] : 0.0;
-      Ns += N_s[k];
-      Ndm += N_dm[k];
-      alpha_glx[k] *= PI / 180.0;
-		}
-  NN = Ns + Ndm;
+	eps_s = new double[M_glx];
+	eps_dm = new double[M_glx];
+
+    for(k = 0; k < M_glx; k++) {
+		fscanf(outf, "%d %[^\n]", &k_glx, name);
+		fscanf(outf, "%d,%d %[^\n]", &N_s[k],&N_dm[k], name);
+		fscanf(outf, "%lf,%lf %[^\n]", &Mass_s[k],&Mass_dm[k], name);
+		fscanf(outf, "%lf,%lf %[^\n]", &eps_s[k],&eps_dm[k], name);
+		fscanf(outf, "%lf %[^\n]", &alpha_glx[k], name);
+		fscanf(outf, "%lf,%lf,%lf %[^\n]", &X_glx[k],&Y_glx[k],&Z_glx[k], name);
+		fscanf(outf, "%lf,%lf,%lf %[^\n]", &Vx_glx[k],&Vy_glx[k],&Vz_glx[k], name);
+		if(Mass_s[k]==0.0 || N_s[k]==0) {Mass_s[k]=0.0; N_s[k]=0;}
+		if(Mass_dm[k]==0.0 || N_dm[k]==0) {Mass_dm[k]=0.0; N_dm[k]=0;}
+		mp_s[k] = (N_s[k]>0) ? Mass_s[k]/N_s[k] : 0.0;
+		mp_dm[k] = (N_dm[k]>0) ? Mass_dm[k]/N_dm[k] : 0.0;
+		Ns += N_s[k];
+		Ndm += N_dm[k];
+		alpha_glx[k] *= PI / 180.0;
+	}
+
+  	NN = Ns + Ndm;
 	printf("NN = %d, Ns = %d, Ndm = %d\n", NN, Ns, Ndm);
-  printf("mp_s[0] = %g, mp_dm[0] = %g \n", mp_s[0], mp_dm[0]);
+  	printf("mp_s[0] = %g, mp_dm[0] = %g \n", mp_s[0], mp_dm[0]);
 	outf = fopen("__start_nbody.ini", "r");
-		fscanf(outf, "%d  %[^\n]", &i_cont, name);
-		fscanf(outf, "%lf  %[^\n]", &tmax, name);
-		fscanf(outf, "%lf  %[^\n]", &dtsave, name);
+	fscanf(outf, "%d  %[^\n]", &i_cont, name);
+	fscanf(outf, "%lf  %[^\n]", &tmax, name);
+	fscanf(outf, "%lf  %[^\n]", &dtsave, name);
 	fclose(outf);
 	//tsave = 0.0;
 	tsave = dtsave;
@@ -419,16 +431,16 @@ int main(int argc, char * argv[])
 	printf("NN / BLOCK_SIZE_b = %d\n", NN / BLOCK_SIZE);
 
 	outf = fopen("__gr_par.ini", "r");
-		fscanf(outf, "%lf  %[^\n]", &Mh, name);
-		fscanf(outf, "%lf  %[^\n]", &a, name);
-		fscanf(outf, "%lf  %[^\n]", &Rh, name);
-		fscanf(outf, "%lf  %[^\n]", &Mb, name);
-		fscanf(outf, "%lf  %[^\n]", &b, name);
-		fscanf(outf, "%lf  %[^\n]", &Rb, name);
-		fscanf(outf, "%lf  %[^\n]", &eps2, name);
-		fscanf(outf, "%lf  %[^\n]", &dtgrav, name);
-		fscanf(outf, "%lf  %[^\n]", &K_m, name);    // K_m = Md/(10^{10}*Msun)
-		fscanf(outf, "%lf  %[^\n]", &K_r, name);    // K_r = L_r / 10 кпк
+	fscanf(outf, "%lf  %[^\n]", &Mh, name);
+	fscanf(outf, "%lf  %[^\n]", &a, name);
+	fscanf(outf, "%lf  %[^\n]", &Rh, name);
+	fscanf(outf, "%lf  %[^\n]", &Mb, name);
+	fscanf(outf, "%lf  %[^\n]", &b, name);
+	fscanf(outf, "%lf  %[^\n]", &Rb, name);
+	fscanf(outf, "%lf  %[^\n]", &eps2, name);
+	fscanf(outf, "%lf  %[^\n]", &dtgrav, name);
+	fscanf(outf, "%lf  %[^\n]", &K_m, name);    // K_m = Md/(10^{10}*Msun)
+	fscanf(outf, "%lf  %[^\n]", &K_r, name);    // K_r = L_r / 10 кпк
 	fclose(outf);
 	printf("%f\n", Mh);
 	printf("%f\n", a);
@@ -466,143 +478,156 @@ int main(int argc, char * argv[])
 	real4 *vel_host = new real4[NN];
 	real2 *mass_host = new real2[NN];
 	real *eps2_p = new real[NN];
-  real *PSI_host = new real[NN];
+  	real *PSI_host = new real[NN];
 	//-----------------------------------------------------
 
-	for (i = 0; i < NN; i++)
-	{
+	for (i = 0; i < NN; i++) {
 		pos_host[i].x = 0.0; pos_host[i].y = 0.0; pos_host[i].z = 0.0; pos_host[i].w = 0.0;
 		vel_host[i].x = 0.0; vel_host[i].y = 0.0; vel_host[i].z = 0.0; vel_host[i].w = 0.0;
 		mass_host[i].x = 0.0; mass_host[i].y = 0.0; PSI_host[i] = 0.0;
 	}
 
-	d.Ns = Ns; d.NN = NN; 
-	d.Mh = Mh; d.Mh_inf = Mh_inf; d.a = a; d.Rh = Rh; d.Mb = Mb; d.b = b; d.Rb = Rb; d.Rh2 = Rh2; d.con = con;	d.const1 = const1;
+	d.Ns = Ns;
+	d.NN = NN;
+	d.Mh = Mh;
+	d.Mh_inf = Mh_inf;
+	d.a = a;
+	d.Rh = Rh;
+	d.Mb = Mb;
+	d.b = b;
+	d.Rb = Rb;
+	d.Rh2 = Rh2;
+	d.con = con;
+	d.const1 = const1;
 	d.c_psi_h = c_psi_h; d.c_psi_b = c_psi_b; d.eps2 = eps2;
 
 	int it = 1, itt = 1, ittg=0, itg=1;
 
 	printf("***Input Data***\n");
 
-  if (i_cont > 0)
-	{
-  //---Stars---
-			i = sprintf(str, "bin/S_%5d.bin", i_cont);
-      outf = fopen(str, "rb");
+  	if (i_cont > 0) {
+  	//---Stars---
+		i = sprintf(str, "bin/S_%5d.bin", i_cont);
+      	outf = fopen(str, "rb");
       	fread(&Ns, sizeof(int), 1, outf);
-				fread(&t, sizeof(double), 1, outf);
-				n0=0;
-				for(k=0; k<M_glx; k++){						
+		fread(&t, sizeof(double), 1, outf);
+		n0 = 0;
+		for(k=0; k<M_glx; k++) {
         	for (i = n0; i < n0+N_s[k]; i++) {
-						fread(&pos_host[i].x, sizeof(double), 1, outf);
-										fread(&pos_host[i].y, sizeof(double), 1, outf);
-										fread(&pos_host[i].z, sizeof(double), 1, outf);
-										fread(&vel_host[i].x, sizeof(double), 1, outf);
-										fread(&vel_host[i].y, sizeof(double), 1, outf);
-										fread(&vel_host[i].z, sizeof(double), 1, outf);
-										mass_host[i].x = mp_s[k];
-										eps2_p[i] = eps_s[k]*eps_s[k];
-								}
-								n0 += N_s[k];
-						}
-            fclose(outf);
-      //---DM---
-			if(Ndm>0)
-			{
-      	i = sprintf(str, "bin/DM_%5d.bin", i_cont);
-        outf = fopen(str, "rb");
-        	fread(&Ndm, sizeof(int), 1, outf);
-          fread(&t, sizeof(double), 1, outf);
-					n0=0;
-					for(k=0; k<M_glx; k++){													
-           		for (i = n0+Ns; i < n0+Ns+N_dm[k]; i++) {
-                  fread(&pos_host[i].x, sizeof(double), 1, outf);
-                  fread(&pos_host[i].y, sizeof(double), 1, outf);
-                  fread(&pos_host[i].z, sizeof(double), 1, outf);
-                  fread(&vel_host[i].x, sizeof(double), 1, outf);
-                  fread(&vel_host[i].y, sizeof(double), 1, outf);
-                  fread(&vel_host[i].z, sizeof(double), 1, outf);
-									mass_host[i].x = mp_dm[k];
-									eps2_p[i] = eps_dm[k]*eps_dm[k];
-            		}
-								n0 += N_dm[k];
-					}
-        fclose(outf);
+				fread(&pos_host[i].x, sizeof(double), 1, outf);
+				fread(&pos_host[i].y, sizeof(double), 1, outf);
+				fread(&pos_host[i].z, sizeof(double), 1, outf);
+				fread(&vel_host[i].x, sizeof(double), 1, outf);
+				fread(&vel_host[i].y, sizeof(double), 1, outf);
+				fread(&vel_host[i].z, sizeof(double), 1, outf);
+				mass_host[i].x = mp_s[k];
+				eps2_p[i] = eps_s[k]*eps_s[k];
 			}
-      it = (int)(t / dtsave);
-      printf("Start time = %f  it = %d\n", t, it);
-      printf("***Start result t***\n");
-			outf = fopen("LIE_0.bin", "rb");
-				fread(&L0, sizeof(real3), 1, outf);
-				fread(&Imp0, sizeof(real3), 1, outf);
-        fread(&E0, sizeof(real), 1, outf);
-			fclose(outf);
-			//result(pos_host, vel_host, mass_host, it, t);
-      it++;
-      itg = (int)(t / dtgrav) + 1;
-      tsave = t + dtsave;
-      tgrav = t + dtgrav;
-	} else
-	{
+			n0 += N_s[k];
+		}
+		fclose(outf);
+      	//---DM---
+		if(Ndm>0) {
+			i = sprintf(str, "bin/DM_%5d.bin", i_cont);
+			outf = fopen(str, "rb");
+        	fread(&Ndm, sizeof(int), 1, outf);
+          	fread(&t, sizeof(double), 1, outf);
+			n0=0;
+			for(k=0; k<M_glx; k++) {
+           		for (i = n0+Ns; i < n0+Ns+N_dm[k]; i++) {
+					fread(&pos_host[i].x, sizeof(double), 1, outf);
+					fread(&pos_host[i].y, sizeof(double), 1, outf);
+					fread(&pos_host[i].z, sizeof(double), 1, outf);
+					fread(&vel_host[i].x, sizeof(double), 1, outf);
+					fread(&vel_host[i].y, sizeof(double), 1, outf);
+					fread(&vel_host[i].z, sizeof(double), 1, outf);
+					mass_host[i].x = mp_dm[k];
+					eps2_p[i] = eps_dm[k]*eps_dm[k];
+				}
+				n0 += N_dm[k];
+			}
+        	fclose(outf);
+		}
+		it = (int)(t / dtsave);
+		printf("Start time = %f  it = %d\n", t, it);
+		printf("***Start result t***\n");
+		outf = fopen("LIE_0.bin", "rb");
+		fread(&L0, sizeof(real3), 1, outf);
+		fread(&Imp0, sizeof(real3), 1, outf);
+		fread(&E0, sizeof(real), 1, outf);
+		fclose(outf);
+		//result(pos_host, vel_host, mass_host, it, t);
+		it++;
+		itg = (int)(t / dtgrav) + 1;
+		tsave = t + dtsave;
+		tgrav = t + dtgrav;
+	} 
+	else {
     	printf("t = %f\n",t);
     	int itmp;
-      real rtmp;
-			//----Stars-------------------------------
-			n0=0;
-      for(k=0; k<M_glx; k++){
-      	if(N_s[k]>0){
-        	i = sprintf(str, "start_S%1d.txt", k);
-          if((outf = fopen(str, "r"))==NULL){printf("Error OF -- %s ",str); return 0;}
-          else {
-          	outf = fopen(str, "r");
-            	fscanf(outf, "%d %lf", &itmp, &rtmp);
-              printf("N_s[%d] = %d, t = %f\n", k, itmp, rtmp);
-              for(i=n0; i<n0+N_s[k]; i++){
-              	fscanf(outf, "%lf %lf %lf %lf %lf %lf", &pos_host[i].x, &pos_host[i].y, &pos_host[i].z, &vel_host[i].x, &vel_host[i].y, &vel_host[i].z);
-                mass_host[i].x = mp_s[k];
-                pos_host[i].x = X_glx[k] + pos_host[i].x*cos(alpha_glx[k]) + pos_host[i].z*sin(alpha_glx[k]);
-                pos_host[i].y += Y_glx[k];
-                pos_host[i].z = Z_glx[k] + pos_host[i].z*cos(alpha_glx[k]) - pos_host[i].x*sin(alpha_glx[k]);
-                vel_host[i].x = Vx_glx[k] + vel_host[i].x*cos(alpha_glx[k]) + vel_host[i].z*sin(alpha_glx[k]);;
-                vel_host[i].y += Vy_glx[k];
-                vel_host[i].z = Vz_glx[k] + vel_host[i].z*cos(alpha_glx[k]) - vel_host[i].x*sin(alpha_glx[k]);
-								eps2_p[i] = eps_s[k]*eps_s[k];
-              }
-            fclose(outf);
-          }
-          n0 += N_s[k];
-        }
-      }
-      //----DM-------------------------------
-      for(k=0; k<M_glx; k++){
-      	if(N_dm[k]>0){
-        	i = sprintf(str, "start_DM%1d.txt", k);
-          if((outf = fopen(str, "r"))==NULL){printf("Error OF -- %s ",str); return 0;}
-          else {
-          	outf = fopen(str, "r");
-            	fscanf(outf, "%d %lf", &itmp, &rtmp);
-              printf("N_dm[%d] = %d, t = %f\n", k, itmp, rtmp);
-              for(i=n0; i<n0+N_dm[k]; i++){
-              	fscanf(outf, "%lf %lf %lf %lf %lf %lf", &pos_host[i].x, &pos_host[i].y, &pos_host[i].z, &vel_host[i].x, &vel_host[i].y, &vel_host[i].z);
-                mass_host[i].x = mp_dm[k];
-                pos_host[i].x = X_glx[k] + pos_host[i].x*cos(alpha_glx[k]) + pos_host[i].z*sin(alpha_glx[k]);
-                pos_host[i].y += Y_glx[k];
-                pos_host[i].z = Z_glx[k] + pos_host[i].z*cos(alpha_glx[k]) - pos_host[i].x*sin(alpha_glx[k]);
-                vel_host[i].x = Vx_glx[k] + vel_host[i].x*cos(alpha_glx[k]) + vel_host[i].z*sin(alpha_glx[k]);;
-                vel_host[i].y += Vy_glx[k];
-                vel_host[i].z = Vz_glx[k] + vel_host[i].z*cos(alpha_glx[k]) - vel_host[i].x*sin(alpha_glx[k]);
-								eps2_p[i] = eps_dm[k]*eps_dm[k];														
-              }
-            fclose(outf);
-          }
-          n0 += N_dm[k];
-        }
-      }
-			tsave = dtsave;
-			tgrav = dtgrav;
-			t = 0.0;
-			//printf("***Start result t=0***\n");
-			//result(pos_host, vel_host, mass_host, 0, 0.0, PSI_host, 0);
+		real rtmp;
+		//----Stars-------------------------------
+		n0=0;
+      	for(k=0; k<M_glx; k++) {
+      		if(N_s[k]>0) {
+        		i = sprintf(str, "start_S%1d.txt", k);
+          		if ((outf = fopen(str, "r")) == NULL) {
+					printf("Error OF -- %s ",str);
+					return 0;
+				}
+          		else {
+          			outf = fopen(str, "r");
+            		fscanf(outf, "%d %lf", &itmp, &rtmp);
+              		printf("N_s[%d] = %d, t = %f\n", k, itmp, rtmp);
+              		for(i=n0; i<n0+N_s[k]; i++){
+						fscanf(outf, "%lf %lf %lf %lf %lf %lf", &pos_host[i].x, &pos_host[i].y, &pos_host[i].z, &vel_host[i].x, &vel_host[i].y, &vel_host[i].z);
+						mass_host[i].x = mp_s[k];
+						pos_host[i].x = X_glx[k] + pos_host[i].x*cos(alpha_glx[k]) + pos_host[i].z*sin(alpha_glx[k]);
+						pos_host[i].y += Y_glx[k];
+						pos_host[i].z = Z_glx[k] + pos_host[i].z*cos(alpha_glx[k]) - pos_host[i].x*sin(alpha_glx[k]);
+						vel_host[i].x = Vx_glx[k] + vel_host[i].x*cos(alpha_glx[k]) + vel_host[i].z*sin(alpha_glx[k]);;
+						vel_host[i].y += Vy_glx[k];
+						vel_host[i].z = Vz_glx[k] + vel_host[i].z*cos(alpha_glx[k]) - vel_host[i].x*sin(alpha_glx[k]);
+						eps2_p[i] = eps_s[k]*eps_s[k];
+              		}
+					fclose(outf);
+          		}
+          		n0 += N_s[k];
+        	}
+		}
+		//----DM-------------------------------
+		for (k = 0; k < M_glx; k++) {
+			if (N_dm[k] > 0) {
+				i = sprintf(str, "start_DM%1d.txt", k);
+				if ((outf = fopen(str, "r")) == NULL) {
+					printf("Error OF -- %s ",str); 
+					return 0;
+				}
+				else {
+					outf = fopen(str, "r");
+					fscanf(outf, "%d %lf", &itmp, &rtmp);
+					printf("N_dm[%d] = %d, t = %f\n", k, itmp, rtmp);
+					for(i=n0; i<n0+N_dm[k]; i++){
+						fscanf(outf, "%lf %lf %lf %lf %lf %lf", &pos_host[i].x, &pos_host[i].y, &pos_host[i].z, &vel_host[i].x, &vel_host[i].y, &vel_host[i].z);
+						mass_host[i].x = mp_dm[k];
+						pos_host[i].x = X_glx[k] + pos_host[i].x*cos(alpha_glx[k]) + pos_host[i].z*sin(alpha_glx[k]);
+						pos_host[i].y += Y_glx[k];
+						pos_host[i].z = Z_glx[k] + pos_host[i].z*cos(alpha_glx[k]) - pos_host[i].x*sin(alpha_glx[k]);
+						vel_host[i].x = Vx_glx[k] + vel_host[i].x*cos(alpha_glx[k]) + vel_host[i].z*sin(alpha_glx[k]);;
+						vel_host[i].y += Vy_glx[k];
+						vel_host[i].z = Vz_glx[k] + vel_host[i].z*cos(alpha_glx[k]) - vel_host[i].x*sin(alpha_glx[k]);
+						eps2_p[i] = eps_dm[k]*eps_dm[k];
+					}
+					fclose(outf);
+				}
+				n0 += N_dm[k];
+			}
+		}
+		tsave = dtsave;
+		tgrav = dtgrav;
+		t = 0.0;
+		//printf("***Start result t=0***\n");
+		//result(pos_host, vel_host, mass_host, 0, 0.0, PSI_host, 0);
     }
 
 
@@ -613,14 +638,14 @@ int main(int argc, char * argv[])
 	real3 **ACC_dev = new real3*[nGPU], **ACC_devt = new real3*[nGPU];
 	real2 **mass_dev = new real2*[nGPU];
 	real **eps2_dev = new real*[nGPU];
-  real **PSI_dev = new real*[nGPU];
+  	real **PSI_dev = new real*[nGPU];
 	//real *dt_dev;
 	int Nk = NN / nGPU;
 
 #pragma omp parallel num_threads(nGPU) default(shared)
 {
   #pragma omp for schedule(static,1) private(i)
-	for (i = 0; i < nGPU; i++){
+	for (i = 0; i < nGPU; i++) {
 		cudaSetDevice(deviceId[i]);
 		cudaMalloc((void**)&pos_dev[i], Nk * sizeof(real4));
 		cudaMalloc((void**)&vel_dev[i], Nk * sizeof(real4));
@@ -630,13 +655,13 @@ int main(int argc, char * argv[])
 		cudaMalloc((void**)&ACC_dev[i], Nk * sizeof(real3));
 		cudaMalloc((void**)&ACC_devt[i], Nk * sizeof(real3));
 		cudaMalloc((void**)&eps2_dev[i], Nk * sizeof(real));
-    cudaMalloc((void**)&PSI_dev[i], Nk * sizeof(real));
+    	cudaMalloc((void**)&PSI_dev[i], Nk * sizeof(real));
 		//Copy data CPU to GPU
 		cudaMemcpy(pos_dev[i], pos_host + i*Nk, Nk * sizeof(real4), cudaMemcpyHostToDevice);
 		cudaMemcpy(vel_dev[i], vel_host + i*Nk, Nk * sizeof(real4), cudaMemcpyHostToDevice);
 		cudaMemcpy(mass_dev[i], mass_host + i*Nk, Nk * sizeof(real2), cudaMemcpyHostToDevice);
 		cudaMemcpy(eps2_dev[i], eps2_p + i*Nk, Nk * sizeof(real), cudaMemcpyHostToDevice);
-    cudaMemcpy(PSI_dev[i], PSI_host + i*Nk, Nk * sizeof(real), cudaMemcpyHostToDevice);
+    	cudaMemcpy(PSI_dev[i], PSI_host + i*Nk, Nk * sizeof(real), cudaMemcpyHostToDevice);
 		//DataBlock dd --- GPU
 		cudaMemcpyToSymbol(dd, &d, sizeof(DataBlock), 0, cudaMemcpyHostToDevice);
 		cudaDeviceSynchronize();
@@ -646,49 +671,47 @@ int main(int argc, char * argv[])
 	}
 	#pragma omp barrier
 	//------Расчет грав. сил-----------------------------------------------------
-  #pragma omp for schedule(static,1) private(i)
+  	#pragma omp for schedule(static,1) private(i)
 	for (i = 0; i < nGPU; i++){
 		cudaSetDevice(deviceId[i]);
 		ACC_Zero << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_dev[i]);
 		cudaDeviceSynchronize();
 	}
 	#pragma omp barrier
-  #pragma omp for schedule(static,1) private(i,j)
-	for (i = 0; i < nGPU; i++){
+  	#pragma omp for schedule(static,1) private(i,j)
+	for (i = 0; i < nGPU; i++) {
 		cudaSetDevice(deviceId[i]);
-		for (j = 0; j < nGPU; j++){
-			if (j != i) 
-			{
+		for (j = 0; j < nGPU; j++) {
+			if (j != i) {
 				ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
 				cudaDeviceSynchronize();
-        PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
-        cudaDeviceSynchronize();
+        		PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
+        		cudaDeviceSynchronize();
 			}
-			else 
-      {
-        ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
+			else {
+        		ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
 				cudaDeviceSynchronize();
-        PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
-        cudaDeviceSynchronize();
-      }
+        		PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
+        		cudaDeviceSynchronize();
+      		}
 		}
 	}
-  #pragma omp barrier
-  #pragma omp for schedule(static,1) private(i)
-	for (i = 0; i < nGPU; i++){
+  	#pragma omp barrier
+  	#pragma omp for schedule(static,1) private(i)
+	for (i = 0; i < nGPU; i++) {
 		cudaSetDevice(deviceId[i]);
-    cudaMemcpy(PSI_host + i*Nk, PSI_dev[i], Nk * sizeof(real), cudaMemcpyDeviceToHost);
+    	cudaMemcpy(PSI_host + i*Nk, PSI_dev[i], Nk * sizeof(real), cudaMemcpyDeviceToHost);
 		cudaDeviceSynchronize();
 	}
 	#pragma omp barrier
 }
-if(it==1){
-	printf("***Start result t=0***\n");
-	result(pos_host, vel_host, mass_host, 0, 0.0, PSI_host, 0);
- }
+	if(it==1) {
+		printf("***Start result t=0***\n");
+		result(pos_host, vel_host, mass_host, 0, 0.0, PSI_host, 0);
+	}
   
-  cudaSetDevice(deviceId[0]);
-  cudaEventCreate(&start1);
+	cudaSetDevice(deviceId[0]);
+	cudaEventCreate(&start1);
 	cudaEventCreate(&stop1);
 
 	cudaEventCreate(&start);
@@ -698,140 +721,136 @@ if(it==1){
 	printf("is_grav = %d  it = %d  itg = %d\n", is_grav, it, itg);
 	printf("t = %g  tgrav = %g  tsave = %g\n", t, tgrav, tsave);
 
-	do
-	{
+	do {
 	// --- Nbody и самогравитация
 	cudaEventRecord(start1, 0);
-  #pragma omp parallel num_threads(nGPU) default(shared)
-  {
+	#pragma omp parallel num_threads(nGPU) default(shared)
+  	{
 		//------Nbody predictor (tn+dtgrav)----------------------------------------------------------------------------
     #pragma omp for schedule(static,1) private(i)
-		for (i = 0; i < nGPU; i++){
+		for (i = 0; i < nGPU; i++) {
 			cudaSetDevice(deviceId[i]);
 			kernelNbody_integTime << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_dev[i], post_dev[i], velt_dev[i], pos_dev[i], vel_dev[i], dtgrav, 0, tgrav - dtgrav, ACC_dev[i]);
-      cudaDeviceSynchronize();
+      		cudaDeviceSynchronize();
 		}
-		 #pragma omp barrier
+		#pragma omp barrier
 		//------Расчет самогравитации Nbody частиц-----------------------------------------------------
-    #pragma omp for schedule(static,1) private(i)
-		for (i = 0; i < nGPU; i++){
+    	#pragma omp for schedule(static,1) private(i)
+		for (i = 0; i < nGPU; i++) {
 			cudaSetDevice(deviceId[i]);
 			ACC_Zero << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_devt[i]);
-      cudaDeviceSynchronize();
+      		cudaDeviceSynchronize();
 		}
-    #pragma omp barrier
-    #pragma omp for schedule(static,1) private(i,j)
-		for (i = 0; i < nGPU; i++){
+		#pragma omp barrier
+		#pragma omp for schedule(static,1) private(i,j)
+		for (i = 0; i < nGPU; i++) {
 			cudaSetDevice(deviceId[i]);
-			for (j = 0; j < nGPU; j++){
-				if (j != i)
-				{
+			for (j = 0; j < nGPU; j++) {
+				if (j != i) {
 					ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_devt[i], post_dev[i], post_dev[j], mass_dev[j], eps2_dev[j]);
-          cudaDeviceSynchronize();
+          			cudaDeviceSynchronize();
 				}
 				else {
 					ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_devt[i], post_dev[i], post_dev[i], mass_dev[i], eps2_dev[i]);
-        	cudaDeviceSynchronize();
+        			cudaDeviceSynchronize();
 				}
 			}
 		}
-    #pragma omp barrier
+    	#pragma omp barrier
 		//------Nbody corrector (tn+dtgrav)----------------------------------------------------------------------------
-    #pragma omp for schedule(static,1) private(i)
-		for (i = 0; i < nGPU; i++){
+    	#pragma omp for schedule(static,1) private(i)
+		for (i = 0; i < nGPU; i++) {
 			cudaSetDevice(deviceId[i]);
 			kernelNbody_integTime << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_devt[i], pos_dev[i], vel_dev[i], post_dev[i], velt_dev[i], dtgrav, 1, tgrav, ACC_dev[i]);
-      cudaDeviceSynchronize();
+      		cudaDeviceSynchronize();
 		}
-    #pragma omp barrier
+    	#pragma omp barrier
 		//----------------------------------------------------------------------------------------------------------------------
-  }
+  	}
     cudaSetDevice(deviceId[0]);
-		cudaEventRecord(stop1, 0);
-		cudaEventSynchronize(stop1);
-		cudaEventElapsedTime(&gpuTime1, start1, stop1);
-		gpuTime_GFC += gpuTime1;
-		ittg++;
-		itg++;
-		t = tgrav;
-		tgrav = itg*dtgrav;
-		//tgrav += dtgrav;
-		it_grav++;
+	cudaEventRecord(stop1, 0);
+	cudaEventSynchronize(stop1);
+	cudaEventElapsedTime(&gpuTime1, start1, stop1);
+	gpuTime_GFC += gpuTime1;
+	ittg++;
+	itg++;
+	t = tgrav;
+	tgrav = itg*dtgrav;
+	//tgrav += dtgrav;
+	it_grav++;
 
-		if (it_grav >= is_grav){
-			tsave = tgrav;
-			//Copy data GPU to CPU
+	if (it_grav >= is_grav) {
+		tsave = tgrav;
+		//Copy data GPU to CPU
     #pragma omp parallel num_threads(nGPU) default(shared)
     {
-      for (i = 0; i < nGPU; i++){
+      	for (i = 0; i < nGPU; i++){
 		    cudaSetDevice(deviceId[i]);
 		    PSI_Zero << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i]);
-				cudaDeviceSynchronize();
+			cudaDeviceSynchronize();
 	    }
-      #pragma omp barrier
-      #pragma omp for schedule(static,1) private(i,j)
-	    for (i = 0; i < nGPU; i++){
+		#pragma omp barrier
+		#pragma omp for schedule(static,1) private(i,j)
+	    for (i = 0; i < nGPU; i++) {
 		    cudaSetDevice(deviceId[i]);
-		    for (j = 0; j < nGPU; j++){
-			    if (j != i) 
-			    {
-            PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
-            cudaDeviceSynchronize();
+		    for (j = 0; j < nGPU; j++) {
+			    if (j != i) {
+            		PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
+            		cudaDeviceSynchronize();
 			    }
-			    else 
-          {
-            PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
-            cudaDeviceSynchronize();
-          }
+			    else {
+					PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
+					cudaDeviceSynchronize();
+				}
 		    }
 	    }
-      #pragma omp barrier
-      #pragma omp for schedule(static,1) private(i)
-			for (i = 0; i < nGPU; i++){
-				cudaSetDevice(deviceId[i]);
-				cudaMemcpy(pos_host + i*Nk, pos_dev[i], Nk * sizeof(real4), cudaMemcpyDeviceToHost);
-				cudaMemcpy(vel_host + i*Nk, vel_dev[i], Nk * sizeof(real4), cudaMemcpyDeviceToHost);
-				cudaMemcpy(mass_host + i*Nk, mass_dev[i], Nk * sizeof(real2), cudaMemcpyDeviceToHost);
-        cudaMemcpy(PSI_host + i*Nk, PSI_dev[i], Nk * sizeof(real), cudaMemcpyDeviceToHost);
-				cudaDeviceSynchronize();
-			}
-			#pragma omp barrier
-    }
-			cudaSetDevice(deviceId[0]);
-      cudaEventRecord(stop, 0);
-			cudaEventSynchronize(stop);
-			cudaEventElapsedTime(&gpuTime, start, stop);
-
-			//-------------------------------------------------------------------------------------
-			gpuTime = (gpuTime_GFC) / itt;
-			printf("--------------------------------------------------------------------------------");
-			outf = (it==1) ? fopen("time_frame.dat", "w") : fopen("time_frame.dat", "a");
-			fprintf(outf, "%d %g %g %g %g\n", it*itt, t, 0.001f*gpuTime_GFC, 0.001f*gpuTime_US, 0.001f*(gpuTime_US+gpuTime_GFC));
-			fclose(outf);
-
-			printf("<Time_frame> = %.3f s, frame = %d, iter = %d, iter_g = %d\n", 0.001f*gpuTime, it, itt, ittg);
-			printf("Time = (%g,  %g) ---  dt = (%g,  %g)\n", t, tgrav-dtgrav, dtsave/itt, dtgrav);
-			printf("t_GFC = %g s, t_US = %g\n", 0.001f*gpuTime_GFC / ittg, 0.001f*gpuTime_US / itt);
-
-
-			i = 1;
-			printf("i=%d :: rho[i] = %g  e[i] = %g  h[i] = %g\n", i, pos_host[i].w, vel_host[i].w, mass_host[i].y);
-
-			fi = atan2(pos_host[i].y, pos_host[i].x);
-			r = sqrt(pos_host[i].x*pos_host[i].x + pos_host[i].y*pos_host[i].y);
-			vr = (vel_host[i].x*pos_host[i].x + vel_host[i].y*pos_host[i].y) / r;
-			vfi = (vel_host[i].y*pos_host[i].x - vel_host[i].x*pos_host[i].y) / r;
-			printf("Vr[i] = %g  Vfi[i] = %g  Vz[i] = %g\n", vr, vfi, vel_host[i].z);
-			printf("r[i] = %g  fi[i] = %g  z[i] = %g\n", r, fi, pos_host[i].z);
-
-			result(pos_host, vel_host, mass_host, it, t, PSI_host, it*itt);
-
-			tsave += dtsave; it++;
-			itt = 0; ittg = 0; 
-			it_grav = 0;
-			cudaEventRecord(start, 0);
-			gpuTime_GFC = 0.0; gpuTime_US = 0.0;
+		#pragma omp barrier
+		#pragma omp for schedule(static,1) private(i)
+		for (i = 0; i < nGPU; i++){
+			cudaSetDevice(deviceId[i]);
+			cudaMemcpy(pos_host + i*Nk, pos_dev[i], Nk * sizeof(real4), cudaMemcpyDeviceToHost);
+			cudaMemcpy(vel_host + i*Nk, vel_dev[i], Nk * sizeof(real4), cudaMemcpyDeviceToHost);
+			cudaMemcpy(mass_host + i*Nk, mass_dev[i], Nk * sizeof(real2), cudaMemcpyDeviceToHost);
+        	cudaMemcpy(PSI_host + i*Nk, PSI_dev[i], Nk * sizeof(real), cudaMemcpyDeviceToHost);
+			cudaDeviceSynchronize();
 		}
+		#pragma omp barrier
+    }
+		cudaSetDevice(deviceId[0]);
+      	cudaEventRecord(stop, 0);
+		cudaEventSynchronize(stop);
+		cudaEventElapsedTime(&gpuTime, start, stop);
+
+		//-------------------------------------------------------------------------------------
+		gpuTime = (gpuTime_GFC) / itt;
+		printf("--------------------------------------------------------------------------------");
+		outf = (it==1) ? fopen("time_frame.dat", "w") : fopen("time_frame.dat", "a");
+		fprintf(outf, "%d %g %g %g %g\n", it*itt, t, 0.001f*gpuTime_GFC, 0.001f*gpuTime_US, 0.001f*(gpuTime_US+gpuTime_GFC));
+		fclose(outf);
+
+		printf("<Time_frame> = %.3f s, frame = %d, iter = %d, iter_g = %d\n", 0.001f*gpuTime, it, itt, ittg);
+		printf("Time = (%g,  %g) ---  dt = (%g,  %g)\n", t, tgrav-dtgrav, dtsave/itt, dtgrav);
+		printf("t_GFC = %g s, t_US = %g\n", 0.001f*gpuTime_GFC / ittg, 0.001f*gpuTime_US / itt);
+
+
+		i = 1;
+		printf("i=%d :: rho[i] = %g  e[i] = %g  h[i] = %g\n", i, pos_host[i].w, vel_host[i].w, mass_host[i].y);
+
+		fi = atan2(pos_host[i].y, pos_host[i].x);
+		r = sqrt(pos_host[i].x*pos_host[i].x + pos_host[i].y*pos_host[i].y);
+		vr = (vel_host[i].x*pos_host[i].x + vel_host[i].y*pos_host[i].y) / r;
+		vfi = (vel_host[i].y*pos_host[i].x - vel_host[i].x*pos_host[i].y) / r;
+		printf("Vr[i] = %g  Vfi[i] = %g  Vz[i] = %g\n", vr, vfi, vel_host[i].z);
+		printf("r[i] = %g  fi[i] = %g  z[i] = %g\n", r, fi, pos_host[i].z);
+
+		result(pos_host, vel_host, mass_host, it, t, PSI_host, it*itt);
+
+		tsave += dtsave; it++;
+		itt = 0; ittg = 0; 
+		it_grav = 0;
+		cudaEventRecord(start, 0);
+		gpuTime_GFC = 0.0; gpuTime_US = 0.0;
+	}
 		itt++;
 	} while (t<tmax);
 
