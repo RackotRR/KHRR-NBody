@@ -263,96 +263,185 @@ __host__ void  result(real4 *pos, real4 *vel, real2 *mass, int it, real t, real 
 	printf("print result begin\n");
 
 	FILE *outf;
-	int Ns = d.Ns, NN = d.NN, i;
-	real vfi, vr, vx, vy, vz, x, y, z, r, Ek,Ep,E;
+	int Ns = d.Ns;
+	int NN = d.NN;
+	int i;
+	real vfi, vr, vx, vy, vz, x, y, z, r;
 	real Vr_max = 0.0, Vfi_max = 0.0, Vz_max = 0.0, R_max = 0.0, Z_max = 0.0;
-	real3 Imp = make_real3(0.0, 0.0, 0.0), L;
-	int Ndm = NN-Ns;
+	real Ek = 0.0; // kinetic energy
+	real Ep = 0.0; // potential energy
+	real E = 0.0; // total energy
+	real3 Imp = make_real3(0.0, 0.0, 0.0); // momentum
+	real3 L = make_real3(0.0, 0.0, 0.0); // angular momentum
 
 	//---Star------
 	print_particles_bin("S", 0, Ns, pos, vel, it, t);
 
-	 //---DM------
-  	if(Ndm > 0) {
+	//---DM------
+  	if(NN > Ns) {
+		int Ndm = NN - Ns;
 		print_particles_bin("DM", Ns, Ndm, pos, vel, it, t);
 	}
 
-  	L.x = 0.0; L.y = 0.0; L.z = 0.0;
-  	Ek = 0.0; Ep = 0.0;
-	for (i = 0; i < NN; i++)
-	{
-		x = pos[i].x; y = pos[i].y; z = pos[i].z;
-		vx = vel[i].x; vy = vel[i].y; vz = vel[i].z;
-		r = sqrt(x*x + y*y);
-		if (r > 0.0) { vr = (vx*x + vy*y) / r; vfi = (vy*x - vx*y) / r; }
-		else { vr = 0.0; vfi = 0.0; }
+  	Ek = 0.0;
+	Ep = 0.0;
+	for (i = 0; i < NN; i++) {
+		x = pos[i].x;
+		y = pos[i].y;
+		z = pos[i].z;
+
+		vx = vel[i].x;
+		vy = vel[i].y;
+		vz = vel[i].z;
+
+		r = sqrt(x * x + y * y);
+		if (r > 0.0) {
+			vr = (vx * x + vy * y) / r;
+			vfi = (vy * x - vx * y) / r;
+		}
+		else {
+			vr = 0.0;
+			vfi = 0.0;
+		}
 
 		L.x += (vz*y - vy*z)*mass[i].x;
 		L.y += (vx*z - vz*x)*mass[i].x;
 		L.z += (vy*x - vx*y)*mass[i].x;
-		Imp.x += mass[i].x*vx;
-		Imp.y += mass[i].x*vy;
-		Imp.z += mass[i].x*vz;
-		Ek += mass[i].x*(vx*vx+vy*vy+vz*vz);
-		Ep += mass[i].x*PSI[i];
+		Imp.x += mass[i].x * vx;
+		Imp.y += mass[i].x * vy;
+		Imp.z += mass[i].x * vz;
+		Ek += mass[i].x * (vx * vx + vy * vy + vz * vz);
+		Ep += mass[i].x * PSI[i];
 
-		Vr_max = (Vr_max < abs(vr)) ? abs(vr) : Vr_max;
-		Vfi_max = (Vfi_max < vfi) ? vfi : Vfi_max;
-		Vz_max = (Vz_max < abs(vz)) ? abs(vz) : Vz_max;
-		R_max = (R_max < r) ? r : R_max;
-		Z_max = (Z_max < abs(z)) ? abs(z) : Z_max;
+		Vr_max = max(Vr_max, abs(vr));
+		Vfi_max = max(Vfi_max, vfi);
+		Vz_max = max(Vz_max, abs(vz));
+		R_max = max(R_max, r);
+		Z_max = max(Z_max, abs(z));
 	}
-  	E = 0.5*(Ek+Ep);
+  	E = 0.5 * (Ek + Ep);
 
 	if (it == 0) {
-		L0.x = L.x; L0.y = L.y; L0.z = L.z;
-		Imp0.x = Imp.x; Imp0.y = Imp.y; Imp0.z = Imp.z;
+		L0.x = L.x;
+		L0.y = L.y;
+		L0.z = L.z;
+		Imp0.x = Imp.x;
+		Imp0.y = Imp.y;
+		Imp0.z = Imp.z;
     	E0=E;
 		outf = fopen("LIE_0.bin", "wb");
-			fwrite(&L0, sizeof(real3), 1, outf);
-			fwrite(&Imp0, sizeof(real3), 1, outf);
+		fwrite(&L0, sizeof(real3), 1, outf);
+		fwrite(&Imp0, sizeof(real3), 1, outf);
       	fwrite(&E0, sizeof(real), 1, outf);
 		fclose(outf);
 	}
 
-	real LL = sqrt(L.x*L.x+L.y*L.y+L.z*L.z);
-	real LL0 = sqrt(L0.x*L0.x+L0.y*L0.y+L0.z*L0.z);
+	real LL = sqrt(
+		L.x * L.x +
+		L.y * L.y +
+		L.z * L.z
+	);
+	real LL0 = sqrt(
+		L0.x * L0.x +
+		L0.y * L0.y +
+		L0.z * L0.z
+	);
 
 
 	printf("           ***Star***");
-	printf("\n R_max = %g  Z_max = %g \n", R_max, Z_max);
-	printf("Vr_max = %g  Vfi_max = %g  Vz_max = %g \n", Vr_max, Vfi_max, Vz_max);
+	printf("\n R_max = %g  Z_max = %g \n",
+		R_max,
+		Z_max
+	);
+	printf("Vr_max = %g  Vfi_max = %g  Vz_max = %g \n",
+		Vr_max,
+		Vfi_max,
+		Vz_max
+	);
+
 	printf("           ***Conservation Laws***\n");
-	printf("----Imp0--- = %g; %g; %g  \n", Imp0.x, Imp0.y, Imp0.z);
-	printf("----dImp--- = %g; %g; %g  \n", Imp.x - Imp0.x, Imp.y - Imp0.y, Imp.z - Imp0.z);
-	printf("Lz = %g  dLz = %g \n", L.z, L.z / L0.z - 1.0);
-	printf("LL = %g  dLL = %g \n", LL, LL/LL0-1.0);
-  	printf("E = %g  dE = %g \n", E, E/E0 - 1.0);
+	printf("----Imp0--- = %g; %g; %g  \n",
+		Imp0.x,
+		Imp0.y,
+		Imp0.z
+	);
+	printf("----dImp--- = %g; %g; %g  \n",
+		Imp.x - Imp0.x,
+		Imp.y - Imp0.y,
+		Imp.z - Imp0.z
+	);
+	printf("Lz = %g  dLz = %g \n",
+		L.z,
+		L.z / L0.z - 1.0
+	);
+	printf("LL = %g  dLL = %g \n",
+		LL,
+		LL / LL0 - 1.0
+	);
+  	printf("E = %g  dE = %g \n",
+		E,
+		E / E0 - 1.0
+	);
 
 	outf = (it == 0)
 		? fopen("Lz(t).dat", "w")
 		: fopen("Lz(t).dat", "a");
-	fprintf(outf, "%d %f %1.15f %g %g\n", it_all, t, L.z, L.z/L0.z-1.0, fabs(L.z/L0.z-1.0) );
+	fprintf(outf, "%d %f %1.15f %g %g\n",
+		it_all,
+		t,
+		L.z,
+		L.z / L0.z - 1.0,
+		fabs(L.z / L0.z - 1.0)
+	);
 	fclose(outf);
 
 	outf = (it == 0)
 		? fopen("LL(t).dat", "w")
 		: fopen("LL(t).dat", "a");
-	fprintf(outf, "%d %f %1.15f %g %g\n", it_all, t, LL, LL/LL0-1.0, fabs(LL/LL0-1.0) );
+	fprintf(outf, "%d %f %1.15f %g %g\n",
+		it_all,
+		t,
+		LL,
+		LL / LL0 - 1.0,
+		fabs(LL / LL0 - 1.0)
+	);
 	fclose(outf);
 
 	outf = (it == 0)
 		? fopen("Imp(t).dat", "w")
 		: fopen("Imp(t).dat", "a");
-	real Impls = sqrt(Imp.x*Imp.x+Imp.y*Imp.y+Imp.z*Imp.z);
-	real Impls0 = sqrt(Imp0.x*Imp0.x+Imp0.y*Imp0.y+Imp0.z*Imp0.z);
-	fprintf(outf, "%d %f %1.15f %g %g %g\n", it_all, t, Impls, Impls-Impls0, Impls/Impls0-1.0, fabs(Impls/Impls0-1.0));
+	real Impls = sqrt(
+		Imp.x * Imp.x +
+		Imp.y * Imp.y +
+		Imp.z * Imp.z
+	);
+	real Impls0 = sqrt(
+		Imp0.x * Imp0.x +
+		Imp0.y * Imp0.y +
+		Imp0.z * Imp0.z
+	);
+	fprintf(outf, "%d %f %1.15f %g %g %g\n",
+		it_all,
+		t,
+		Impls,
+		Impls - Impls0,
+		Impls / Impls0 - 1.0,
+		fabs(Impls / Impls0 - 1.0)
+	);
 	fclose(outf);
 
   	outf = (it == 0)
 		? fopen("E(t).dat", "w")
 		: fopen("E(t).dat", "a");
-	fprintf(outf, "%d %f %1.15f %g %g %g %g\n", it_all, t, E, E/E0-1.0, fabs(E/E0-1.0), 0.5*Ek, 0.5*Ep);
+	fprintf(outf, "%d %f %1.15f %g %g %g %g\n",
+		it_all,
+		t,
+		E,
+		E / E0 - 1.0,
+		fabs(E / E0 - 1.0),
+		0.5 * Ek,
+		0.5 * Ep
+	);
 	fclose(outf);
 
 	printf("print result end\n");
@@ -529,7 +618,10 @@ int main(int argc, char * argv[])
 	}
 
 	cudaEvent_t start, stop, start1, stop1;
-	float gpuTime = 0.0, gpuTime_GFC = 0.0, gpuTime_US = 0.0, gpuTime1 = 0.0;
+	float gpuTime = 0.0; //
+	float gpuTime_GFC = 0.0; // time between saves
+	float gpuTime_US = 0.0; // zero only ???
+	float gpuTime1 = 0.0; // time for single iteration
 	//-----Unitial State---------------------------------------------------------
 	real t = 0.0; // current time
 	real tmax = 0.0; // max simulation time
@@ -609,8 +701,8 @@ int main(int argc, char * argv[])
 	printf("eps2\t= %f\n", eps2);
 	printf("dtgrav\t= %f\n", dtgrav);
 
-	const int is_grav = (int)(dtsave / dtgrav + 0.5);
-	int it_grav = 0;
+	const int is_grav = (int)(dtsave / dtgrav + 0.5); // in-frame iterations max (between saves)
+	int it_grav = 0; // in-frame iterations (between saves)
 
 	const real Rh2 = 3.0*Rh;
 	const real rcore1 = Rh / a;
@@ -671,10 +763,10 @@ int main(int argc, char * argv[])
 	d.c_psi_b = c_psi_b;
 	d.eps2 = eps2;
 
-	int it = 1,
+	int it = 1, // save num
 		itt = 1,
-		ittg=0,
-		itg=1;
+		ittg = 0,
+		itg = 1;
 
 	printf("***Input Data***\n");
 
@@ -953,7 +1045,7 @@ int main(int argc, char * argv[])
 #pragma omp parallel num_threads(nGPU) default(shared)
 		{
 			//------Nbody predictor (tn+dtgrav)----------------------------------------------------------------------------
-			printf("Nbody predictor\n");
+			printf("Nbody predictor %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
 #pragma omp for schedule(static,1) private(i)
 			for (i = 0; i < nGPU; i++) {
 				cudaSetDevice(deviceId[i]);
@@ -962,7 +1054,7 @@ int main(int argc, char * argv[])
 			}
 #pragma omp barrier
 			//------Расчет самогравитации Nbody частиц-----------------------------------------------------
-			printf("Nbody grav\n");
+			printf("Nbody grav %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
 #pragma omp for schedule(static,1) private(i)
 			for (i = 0; i < nGPU; i++) {
 				cudaSetDevice(deviceId[i]);
@@ -986,7 +1078,7 @@ int main(int argc, char * argv[])
 			}
 #pragma omp barrier
 			//------Nbody corrector (tn+dtgrav)----------------------------------------------------------------------------
-			printf("Nbody corrector\n");
+			printf("Nbody corrector %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
 #pragma omp for schedule(static,1) private(i)
 			for (i = 0; i < nGPU; i++) {
 				cudaSetDevice(deviceId[i]);
@@ -1000,12 +1092,13 @@ int main(int argc, char * argv[])
 		cudaEventRecord(stop1, 0);
 		cudaEventSynchronize(stop1);
 		cudaEventElapsedTime(&gpuTime1, start1, stop1);
+		printf("predictor-grav-corrector time: %lf s\n", gpuTime1 * TIME2SEC);
 		gpuTime_GFC += gpuTime1;
+		printf("passed time from last save: %lf s\n", gpuTime_GFC * TIME2SEC);
 		ittg++;
 		itg++;
 		t = tgrav;
 		tgrav = itg * dtgrav;
-		//tgrav += dtgrav;
 		it_grav++;
 
 		if (it_grav >= is_grav) {
@@ -1048,18 +1141,19 @@ int main(int argc, char * argv[])
 #pragma omp barrier
 			}
 			cudaSetDevice(deviceId[0]);
-			cudaEventRecord(stop, 0);
+ 			cudaEventRecord(stop, 0);
 			cudaEventSynchronize(stop);
 			cudaEventElapsedTime(&gpuTime, start, stop);
+			printf("time between saves: %g s", gpuTime * TIME2SEC);
 
 			//-------------------------------------------------------------------------------------
 			gpuTime = gpuTime_GFC / itt;
-			printf("--------------------------------------------------------------------------------");
+			printf("--------------------------------------------------------------------------------\n");
 			outf = (it == 1)
 				? fopen("time_frame.dat", "w")
 				: fopen("time_frame.dat", "a");
 			fprintf(outf, "%d %g %g %g %g\n",
-				it*itt,
+				it * itt,
 				t,
 				TIME2SEC * gpuTime_GFC,
 				TIME2SEC * gpuTime_US,
@@ -1101,7 +1195,8 @@ int main(int argc, char * argv[])
 			itt = 0; ittg = 0;
 			it_grav = 0;
 			cudaEventRecord(start, 0);
-			gpuTime_GFC = 0.0; gpuTime_US = 0.0;
+			gpuTime_GFC = 0.0;
+			gpuTime_US = 0.0;
 		}
 		itt++;
 	} while (t < tmax);
