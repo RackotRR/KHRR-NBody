@@ -4,6 +4,15 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include <cstdlib>
+#include <algorithm>
+#include <fstream>
+#include <iostream>
+#include <vector>
+#include <map>
+#include <numeric>
+
+#include "RRCU.cuh"
+
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,8 +33,27 @@
 #define make_real4 make_double4_32a
 #define make_real2 make_double2
 
+using namespace RR::CUDA;
+
 real Z_max, E0;
 real3 Imp0, L0;
+
+typedef struct{
+    int count; // число частиц в ячейке
+    int start_id; // накопленная сумма частиц (префиксная сумма) - идекс в массиве частиц
+} CellInfo;
+
+typedef struct {
+    int cell_id; // индекс ячейки
+    int id_in_cell; // индекс частицы в ячейке
+} ParticleCellInfo;
+
+template<typename T>
+constexpr T intlog2(T size) {
+	return size > 1
+        ? 1 + intlog2(size >> 1)
+        : 0;
+}
 
 struct DataBlock{
 	int		Ns;
@@ -43,6 +71,18 @@ struct DataBlock{
 	real    c_psi_h;
 	real    c_psi_b;
 	real    eps2;
+    real4 	domainMin;
+    real4 	domainMax;
+    real4 	cellSize;
+    int3	gridSize;
+	double  dt_wave;
+	double  c_wave;
+	double  dx_wave;
+	int 	nx_wave;
+	double diss_base;
+	double diss_extra;
+	double sim_l;
+	double bc_l;
 };
 
 DataBlock d;
@@ -58,6 +98,7 @@ __device__ real3 dev_fex(real4 p, real t){
 		p.y*p.y +
 		p.z*p.z
 	);
+
 	if (rr > 0.0) {
 		rr3 = rr*rr*rr;
 		rrcore = rr / dd.a;
@@ -80,6 +121,13 @@ __device__ real3 dev_fex(real4 p, real t){
 		f = make_real3(0.0, 0.0, 0.0);
 	}
 	return f;
+}
+
+template<typename T>
+__host__ __device__ T clamp(T val, T min_val, T max_val) {
+    if (val < min_val) return min_val;
+    if (val > max_val) return max_val;
+    return val;
 }
 
 //-----Force_Nbody kernel--------
@@ -193,7 +241,9 @@ __global__ void PSI_kernel(real *PSI, real4 *Pos_i, real4 *Pos_j, real2 *Mhp_j, 
 __global__ void kernelNbody_integTime(real3 *ACC, real4 *Pos_t, real4 *Vel_t, real4 *Pos, real4 *Vel, real dt, int istep, real t, real3 *ACC0)
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
-	real4 v = Vel[i], r = Pos[i], vt;
+	real4 v = Vel[i];
+	real4 r = Pos[i];
+	real4 vt;
 	real3 f, fex;
 
 	fex = dev_fex(r, t);
@@ -227,13 +277,806 @@ __global__ void kernelNbody_integTime(real3 *ACC, real4 *Pos_t, real4 *Vel_t, re
 		ACC0[i] = ACC[i];
 	}
 }
+
+// ====================================================
+// ЯДРО 1: ИНИЦИАЛИЗАЦИЯ ВСПОМОГАТЕЛЬНЫХ МАССИВОВ
+// ====================================================
+__global__ void initSortingArrays(
+    CellInfo* cellInfo,     // [TOTAL_CELLS] информация о ячейках
+    int* cellParticleCount, // [TOTAL_CELLS] счётчик для atomicAdd
+    int* maxPBC,            // [TOTAL_CELLS/BLOCK_SIZE] частиц в блоке
+    const int numCells,
+	const int numBlocks
+)
+{
+	int i_cell = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_cell >= numCells) return;
+
+    // Инициализация нулями
+    cellInfo[i_cell].count = 0;
+    cellInfo[i_cell].start_id = 0;
+    cellParticleCount[i_cell] = 0;
+
+    // Инициализация maxPBC для каждого блока (делает только первый поток)
+    if (i_cell % BLOCK_SIZE == 0) {
+        if (blockIdx.x < numBlocks) {
+            maxPBC[blockIdx.x] = 0;
+        }
+    }
+}
+
+// ====================================================
+// ЯДРО 2: ИНИЦИАЛИЗАЦИЯ ВСПОМОГАТЕЛЬНЫХ МАССИВОВ
+// ====================================================
+__global__ void assignParticlesToCells(
+	const real4* particles_pos, // [N] исходные частицы
+    ParticleCellInfo* particleCellInfo, // [N] инфо: x=ячейка, y=индекс в ячейке
+    CellInfo* cellInfo,          // [TOTAL_CELLS] для подсчёта частиц
+    int* cellParticleCount, // [TOTAL_CELLS] счётчик для atomicAdd
+    const int numParticles
+)
+{
+    int i_part = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_part >= numParticles) return;
+
+    real4 p = particles_pos[i_part];
+
+    // Вычисление индексов ячейки
+    int ix = clamp((int)((p.x - dd.domainMin.x) / dd.cellSize.x), 0, (int)(dd.gridSize.x - 1));
+    int iy = clamp((int)((p.y - dd.domainMin.y) / dd.cellSize.y), 0, (int)(dd.gridSize.y - 1));
+    int iz = clamp((int)((p.z - dd.domainMin.z) / dd.cellSize.z), 0, (int)(dd.gridSize.y - 1));
+
+    // Линейный индекс ячейки (Morton-подобный порядок для пространственной локальности)
+    // Используем чередование битов для лучшей когерентности
+    int i_cell = iz * dd.gridSize.x * dd.gridSize.y + iy * dd.gridSize.x + ix;
+
+    // Сохраняем номер ячейки для частицы
+    particleCellInfo[i_part].cell_id = i_cell;
+
+    // Атомарно увеличиваем счётчик частиц в ячейке
+    int pos = atomicAdd(&cellParticleCount[i_cell], 1);
+
+    // Сохраняем позицию внутри ячейки
+    particleCellInfo[i_part].id_in_cell = pos;
+
+    // Атомарно обновляем количество частиц в ячейке
+	atomicAdd(&cellInfo[i_cell].count, 1);
+
+}
+
+// ====================================================
+// ЯДРО 3: ВЫЧИСЛЕНИЕ ЧАСТИЧНЫХ СУММ (КАСКАДНЫЙ АЛГОРИТМ)
+// ====================================================
+__global__ void computePrefixSums(
+    CellInfo* cellInfo,    // [TOTAL_CELLS]
+    int* maxPBC,           // [TOTAL_CELLS/BLOCK_SIZE]
+    const int numCells)
+{
+    __shared__ int shared[BLOCK_SIZE];
+    __shared__ int sharedPrev[BLOCK_SIZE];
+
+    int i_cell = threadIdx.x + blockIdx.x * blockDim.x;
+    int i_local = threadIdx.x;
+    int i_block = blockIdx.x;
+
+    // Загружаем количество частиц в ячейке
+    if (i_cell >= numCells) {
+        shared[i_local] = 0;
+        sharedPrev[i_local] = 0;
+    }
+    else {
+        int count = cellInfo[i_cell].count;
+        shared[i_local]     = count;
+        sharedPrev[i_local] = count;
+    }
+
+	__syncthreads();
+    // Каскадное суммирование (параллельное сканирование)
+    for (int stride = 1; stride < BLOCK_SIZE; stride <<= 1) {
+        if (i_local + stride < BLOCK_SIZE) {
+            shared[i_local + stride] += sharedPrev[i_local];
+        }
+		__syncthreads();
+
+        // Обновляем предыдущие значения
+        sharedPrev[i_local] = shared[i_local];
+		__syncthreads();
+    }
+
+    // Первый поток в блоке сохраняет общую сумму блока
+    if (i_local == 0) {
+        int particles_in_block = shared[BLOCK_SIZE - 1];
+        for (int i = i_block; i < gridDim.x; ++i) {
+            atomicAdd(&(maxPBC[i]), particles_in_block);
+        }
+    }
+}
+
+// ====================================================
+// ЯДРО 4: КОРРЕКТИРОВКА ГЛОБАЛЬНЫХ ПРЕФИКСНЫХ СУММ
+// ====================================================
+__global__ void adjustGlobalPrefixSums(
+    CellInfo* cellInfo,     // [TOTAL_CELLS]
+    const int* maxPBC,      // [TOTAL_CELLS/BLOCK_SIZE]
+    const int numCells)
+{
+    int i_cell = threadIdx.x + blockIdx.x * blockDim.x;
+    int i_block = blockIdx.x;
+    if (i_cell >= numCells) return;
+
+    // Добавляем сумму всех предыдущих блоков
+    if (i_block > 0) {
+        cellInfo[i_cell].start_id += maxPBC[i_block - 1];
+    }
+}
+
+// ====================================================
+__global__ void computeCellMassesUnsorted(
+    const real2* particle_mass,   	   // [N] упорядоченные частицы
+    ParticleCellInfo* particleCellInfo,// [N] инфо: x=ячейка, y=индекс в ячейке
+    double* cellMasses,                // [TOTAL_CELLS] результат
+    const int numParticles)
+{
+    int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_particle >= numParticles) return;
+
+    int i_cell = particleCellInfo[i_particle].cell_id;
+	atomicAdd(&cellMasses[i_cell], particle_mass[i_particle].x);
+}
+
+// ====================================================
+__global__ void countParticles(
+    double* cell_phi,                // [TOTAL_CELLS] результат
+    CellInfo* cellInfo,     // [TOTAL_CELLS]
+	const int numCells
+)
+{
+	int i_cell = threadIdx.x + blockIdx.x * blockDim.x;
+	if (i_cell > numCells) return;
+
+	cell_phi[i_cell] = cellInfo[i_cell].count;
+}
+// ====================================================
+__global__ void zeroCellPhi(
+    double* cell_phi,                // [TOTAL_CELLS] результат
+	const int numCells,
+	double value
+)
+{
+	int i_cell = threadIdx.x + blockIdx.x * blockDim.x;
+	if (i_cell > numCells) return;
+
+	cell_phi[i_cell] = value;
+}
+__global__ void computeCellPhiUnsorted(
+    const real* particle_phi,   	   // [N] упорядоченные частицы
+    const ParticleCellInfo* particleCellInfo,// [N] инфо: x=ячейка, y=индекс в ячейке
+    const CellInfo* cellInfo,     		 // [TOTAL_CELLS]
+    double* cell_phi,                // [TOTAL_CELLS] результат
+    const int numParticles)
+{
+    int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_particle >= numParticles) return;
+
+    int i_cell = particleCellInfo[i_particle].cell_id;
+	atomicAdd(&cell_phi[i_cell], particle_phi[i_particle] / cellInfo[i_cell].count);
+	// if (particleCellInfo[i_particle].id_in_cell == 0) {
+	// 	cell_phi[i_cell] = particle_phi[i_particle];
+	// }
+}
+
+#define at(x, y, z) ((x) + (y) * (NX) + (z) * (NX) * (NX))
+__global__ void acceleration_field(
+	real3* acceleration,
+	const real* phi,
+	const real* mass,
+	const int NX,
+	const double DX
+)
+{
+    int ix = threadIdx.x + blockIdx.x * blockDim.x;
+    int iy = threadIdx.y + blockIdx.y * blockDim.y;
+    int iz = threadIdx.z + blockIdx.z * blockDim.z;
+
+	int xyz = at(ix, iy, iz);
+
+	real3 dphi;
+
+	if (ix == 0) {
+		dphi.x = phi[at(ix + 1, iy, iz)] - phi[xyz];
+	}
+	else if (ix == NX - 1) {
+		dphi.x = phi[xyz] - phi[at(ix - 1, iy, iz)];
+	}
+	else {
+		dphi.x = 0.5 * (phi[at(ix + 1, iy, iz)] - phi[at(ix - 1, iy, iz)]);
+	}
+
+	if (iy == 0) {
+		dphi.y = phi[at(ix, iy + 1, iz)] - phi[xyz];
+	}
+	else if (iy == NX - 1) {
+		dphi.y = phi[xyz] - phi[at(ix, iy - 1, iz)];
+	}
+	else {
+		dphi.y = 0.5 * (phi[at(ix, iy + 1, iz)] - phi[at(ix, iy - 1, iz)]);
+	}
+
+	if (iz == 0) {
+		dphi.z = phi[at(ix, iy, iz + 1)] - phi[xyz];
+	}
+	else if (iz == NX - 1) {
+		dphi.z = phi[xyz] - phi[at(ix, iy, iz - 1)];
+	}
+	else {
+		dphi.z = 0.5 * (phi[at(ix, iy, iz + 1)] - phi[at(ix, iy, iz - 1)]);
+	}
+
+	dphi.x /= DX;
+	dphi.y /= DX;
+	dphi.z /= DX;
+	acceleration[xyz] = dphi;
+}
+
+__global__ void apply_acceleration_to_particles(
+	real3* particle_acceleration,
+	const real3* cell_acceleration,
+    ParticleCellInfo* particleCellInfo,
+    const int numParticles
+)
+{
+    int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_particle >= numParticles) return;
+
+    int i_cell = particleCellInfo[i_particle].cell_id;
+	particle_acceleration[i_particle] = cell_acceleration[i_cell];
+}
+__global__ void apply_psi_to_particles(
+	real* particle_psi,
+	const real* cell_psi,
+    CellInfo* cellInfo,     // [TOTAL_CELLS]
+    ParticleCellInfo* particleCellInfo,
+    const int numParticles
+)
+{
+    int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_particle >= numParticles) return;
+
+    int i_cell = particleCellInfo[i_particle].cell_id;
+	// particle_psi[i_particle] = cell_psi[i_cell];
+	particle_psi[i_particle] = cellInfo[i_cell].count;
+}
+
+__global__ void init_phi(
+	real* mass,
+	real* phi0,
+	real* phi1,
+	real* phi2,
+	const int NX
+)
+{
+    int ix = threadIdx.x + blockIdx.x * blockDim.x;
+    int iy = threadIdx.y + blockIdx.y * blockDim.y;
+    int iz = threadIdx.z + blockIdx.z * blockDim.z;
+
+    int is_valid_idx =
+           ix < NX
+        && iy < NX
+        && iz < NX;
+    if (!is_valid_idx) return;
+
+	mass[at(ix, iy, iz)] = 0;
+	phi0[at(ix, iy, iz)] = 0;
+	phi1[at(ix, iy, iz)] = 0;
+	phi2[at(ix, iy, iz)] = 0;
+}
+
+// ====================================================
+__global__ void wave_diss_iteration(
+    double* phi_new,
+    const double* phi,
+    const double* phi_old,
+    const double* mass
+)
+{
+	const int NX = dd.nx_wave;
+	const double DX = dd.dx_wave;
+	const double DISS_BASE = dd.diss_base;
+	const double DISS_EXTRA = dd.diss_extra;
+	const double SIM_L = dd.sim_l;
+	const double BC_L = dd.bc_l;
+	const double C = dd.c_wave;
+	const double DT = dd.dt_wave;
+
+    int ix = threadIdx.x + blockIdx.x * blockDim.x;
+    int iy = threadIdx.y + blockIdx.y * blockDim.y;
+    int iz = threadIdx.z + blockIdx.z * blockDim.z;
+
+    int is_valid_idx =
+           ix < NX
+        && iy < NX
+        && iz < NX;
+    if (!is_valid_idx) return;
+
+
+    double x = ix * DX;
+    double y = iy * DX;
+    double z = iz * DX;
+
+	double rho = mass[at(ix, iy, iz)] / (DX * DX * DX);
+	const double G = 1.;
+	double f = 4 * PI * G * rho;
+
+    double diss = DISS_BASE;
+#define _DISS_FUNC(x) (DISS_EXTRA * (x) * (x))
+
+    if (x > -(SIM_L - BC_L)) {
+        const double right = SIM_L - BC_L;
+        diss += _DISS_FUNC(fabs(x - right));
+    }
+    else if (x < -(SIM_L - BC_L)) {
+        const double left = -(SIM_L - BC_L);
+        diss += _DISS_FUNC(fabs(x - left));
+    }
+
+    if (y > (SIM_L - BC_L)) {
+        const double top = SIM_L - BC_L;
+        diss += _DISS_FUNC(fabs(y - top));
+    }
+    else if (y < -(SIM_L - BC_L)) {
+        const double bottom = -(SIM_L - BC_L);
+        diss += _DISS_FUNC(fabs(y - bottom));
+    }
+
+    if (z > (SIM_L - BC_L)) {
+        const double far = SIM_L - BC_L;
+        diss += _DISS_FUNC(fabs(z - far));
+    }
+    else if (z < -(SIM_L - BC_L)) {
+        const double near = -(SIM_L - BC_L);
+        diss += _DISS_FUNC(fabs(z - near));
+    }
+
+
+#define _DIM 3
+#define _CSQR (C * C)
+#define _DT2 (DT * DT)
+#define _DX2 (DX * DX)
+#define _Q (diss * C * DT * 0.5)
+#define _W (1 + _Q)
+#define _K (_CSQR * _DT2 / _DX2)
+#define _K_MAIN (_K / _W)
+#define _K_F (-_CSQR * _DT2 / _W)
+#define _K_ACTUAL (2 * (1. - _DIM * _K) / _W)
+#define _K_OLD ((_Q - 1.) / _W)
+
+#define _IS_I_EDGE(i) (i == 0 || i == NX - 1)
+#define _IS_X_EDGE _IS_I_EDGE(ix)
+#define _IS_Y_EDGE _IS_I_EDGE(iy)
+#define _IS_Z_EDGE _IS_I_EDGE(iz)
+
+    if (_IS_X_EDGE || _IS_Y_EDGE || _IS_Z_EDGE) {
+        phi_new[at(ix, iy, iz)] = 0.;
+    }
+    else {
+        phi_new[at(ix, iy, iz)] =
+            phi[at(ix - 1, iy, iz)] * _K_MAIN +
+            phi[at(ix + 1, iy, iz)] * _K_MAIN +
+            phi[at(ix, iy - 1, iz)] * _K_MAIN +
+            phi[at(ix, iy + 1, iz)] * _K_MAIN +
+            phi[at(ix, iy, iz - 1)] * _K_MAIN +
+            phi[at(ix, iy, iz + 1)] * _K_MAIN +
+            phi[at(ix, iy, iz)] * _K_ACTUAL +
+            phi_old[at(ix, iy, iz)] * _K_OLD +
+            f * _K_F;
+    }
+}
+
+// double* calc_phi(
+//     double* phi_new,
+//     double* phi,
+//     double* phi_old,
+//     const double* mass,
+// 	const int NX,
+// 	const int NX_LOCAL,
+// 	const double DX,
+// 	const double DISS_BASE,
+// 	const double DISS_EXTRA,
+// 	const double SIM_L,
+// 	const double BC_L,
+// 	const double C,
+// 	const double DT,
+// 	const int iterations
+// )
+// {
+// 	cudaDeviceSynchronize();
+// 	unsigned threads_count = static_cast<unsigned>(NX_LOCAL);// 8;
+// 	unsigned blocks_count = static_cast<unsigned>(NX + threads_count - 1) / threads_count;
+// 	dim3 threads_per_block{
+// 		threads_count,
+// 		threads_count,
+// 		threads_count
+// 	};
+// 	dim3 blocks_per_grid{
+// 		blocks_count,
+// 		blocks_count,
+// 		blocks_count
+// 	};
+// 	for (int iter = 0; iter < iterations; ++iter) {
+// 		printf("wave_diss_iteration iter: %d\n", iter);
+// 		wave_diss_iteration<<<blocks_per_grid, threads_per_block>>>(
+// 			phi_new,
+// 			phi,
+// 			phi_old,
+// 			mass,
+// 			NX,
+// 			DX,
+// 			DISS_BASE,
+// 			DISS_EXTRA,
+// 			SIM_L,
+// 			BC_L,
+// 			C,
+// 			DT
+// 		);
+
+// 		auto err = cudaDeviceSynchronize();
+// 		if (err != cudaSuccess) {
+// 			printf("wave_diss_iteration err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+// 		}
+
+// 		phi_old = phi;
+// 		phi = phi_new;
+// 		phi_new = phi_old;
+// 	}
+
+// 	return phi;
+// }
+
+void check_energy(
+	const std::vector<double>& cell_mass,
+	const std::vector<double>& cell_phi,
+	int _num_cells
+)
+{
+	double ep = 0;
+	for (size_t i = 0; i < _num_cells; ++i) {
+		ep += 0.5 * cell_mass[i] * cell_phi[i];
+	}
+	printf("ep: %g\n", ep);
+}
+
+void check_cell_particle_info_match(
+	const std::vector<CellInfo>& cell_info,
+	const std::vector<ParticleCellInfo>& particle_info,
+	int _num_particles,
+	int _num_cells
+) {
+	// check cell info & particle cell info
+	std::vector<CellInfo> cell_info_manual(_num_cells, CellInfo{ 0, 0 });
+	for (size_t i = 0; i < _num_particles; ++i) {
+		size_t c = particle_info[i].cell_id;
+		cell_info_manual[c].count++;
+	}
+
+	for (size_t i = 0; i < _num_cells; ++i) {
+		if (cell_info_manual[i].count != cell_info[i].count) {
+			std::cout << "cell info mismatch!!! " << cell_info_manual[i].count << " : " << cell_info[i].count << std::endl;
+		}
+	}
+}
+
+auto check_particles_distribution(
+	const std::vector<CellInfo>& cell_info
+)
+{
+	std::map<int, int> dist;
+	std::ofstream stream{"particles_in_cell.txt"};
+	stream << "n_particles, cells_with_so_many_particles" << std::endl;
+
+	for (const auto& info : cell_info) {
+		dist[info.count]++;
+	}
+
+	std::vector<double> partial_counts;
+	double partial_counts_prev = 0.;
+	for (auto iter = dist.rbegin(); iter != dist.rend(); ++iter) {
+		auto [count, d] = *iter;
+		stream << count << ", " << d << std::endl;
+
+		partial_counts.push_back(partial_counts_prev + count * d);
+		partial_counts_prev = partial_counts.back();
+	}
+
+	std::ofstream stream_partial_sum{ "particles_in_cell_partial_sum.txt" };
+	for (size_t i = 1; i < partial_counts.size(); ++i) {
+		stream_partial_sum << i << ", " << partial_counts[i] << std::endl;
+	}
+}
+
+auto check_mass(
+	const std::vector<double>& cell_mass,
+	const std::vector<double2>& particles_mass,
+	double _dx,
+	double _domain_l,
+	int NX
+)
+{
+	int IY = NX / 2;
+	int IZ = NX / 2;
+
+	std::ofstream stream{ "mass_part.txt" };
+	stream << "x, mass" << std::endl;
+	for (size_t i = 0; i < NX; ++i) {
+		double x = -_domain_l + i * _dx;
+		stream << std::format("{}, {:.6f}", x, cell_mass[at(i, IY, IZ)]) << std::endl;
+	}
+
+	std::cout
+		<< "total mass in cells: "
+		<< std::accumulate(cell_mass.begin(), cell_mass.end(), 0.)
+		<< std::endl;
+
+
+	std::cout << "total mass in particles: "
+		<< std::accumulate(
+			particles_mass.begin(),
+			particles_mass.end(),
+			0.,
+			[](double sum, real2 v) {
+				return sum + v.x;
+			}
+		)
+		<< std::endl;
+}
+
+auto convert_particles(
+	CuDarray<real>& particles_phi,
+	const CuDarray<real4>& particles_pos,
+	const CuDarray<real2>& particles_mass,
+	CuDarray<CellInfo>& cell_info,
+	CuDarray<int>& cell_particles_count,
+	CuDarray<int>& particles_in_block,
+	CuDarray<ParticleCellInfo>& particles_cell_info,
+	CuDarray<real>& cell_mass,
+	CuDarray<real>& cell_phi_prev,
+	CuDarray<real>& cell_phi_curr,
+	CuDarray<real>& cell_phi_next,
+	CuDarray<real3>& cell_acceleration,
+	int _over_cells,
+	int _over_blocks,
+	int _over_particles,
+	int _num_cells,
+	int _num_cell_blocks,
+	int _num_particles,
+	real _domain_l,
+	int _nx,
+	real _dx,
+	int iterations,
+	bool need_init_phi
+)
+{
+	cudaDeviceSynchronize();
+
+	unsigned threads_count = 8;
+	unsigned blocks_count = static_cast<unsigned>(_nx + threads_count - 1) / threads_count;
+	dim3 threads_per_block{ threads_count, threads_count, threads_count };
+	dim3 blocks_per_grid{ blocks_count, blocks_count, blocks_count };
+
+	if (need_init_phi) {
+		cell_mass.set_zero();
+		cell_phi_prev.set_zero();
+		cell_phi_curr.set_zero();
+		cell_phi_next.set_zero();
+	}
+
+	cell_info.set_zero();
+	cell_particles_count.set_zero();
+	particles_in_block.set_zero();
+
+    CuCall(assignParticlesToCells, _over_particles, _over_blocks) (
+        particles_pos,
+        particles_cell_info,
+        cell_info,
+        cell_particles_count,
+        _num_particles
+    );
+    CuCall(computePrefixSums, _over_cells, _over_blocks) (
+        cell_info,
+        particles_in_block,
+        _num_cells
+    );
+    CuCall(adjustGlobalPrefixSums, _over_cells, _over_blocks) (
+        cell_info,
+        particles_in_block,
+        _num_cells
+    );
+	CuCall(computeCellMassesUnsorted, _over_particles, _over_blocks) (
+		particles_mass,
+		particles_cell_info,
+		cell_mass,
+		_num_particles
+	);
+
+	for (int iter = 0; iter < iterations; ++iter) {
+		if (iter && iter % 500 == 0) {
+			std::cout << "wave_diss_iteration iter: " << iter << std::endl;
+		}
+		CuCall(wave_diss_iteration, blocks_per_grid, threads_per_block) (
+			cell_phi_next,
+			cell_phi_curr,
+			cell_phi_prev,
+			cell_mass
+		);
+		swap(cell_phi_prev, cell_phi_curr);
+		swap(cell_phi_curr, cell_phi_next);
+	}
+
+	std::vector<double> cell_mass_host(_num_cells);
+	std::vector<double> cell_phi_host(_num_cells);
+	std::vector<CellInfo> cell_info_host(_num_cells);
+	std::vector<ParticleCellInfo> particle_info_host(_num_particles);
+	cudaMemcpy(cell_mass_host.data(), cell_mass, _num_cells * sizeof(real), cudaMemcpyDeviceToHost);
+	cudaMemcpy(cell_phi_host.data(), cell_phi_curr, _num_cells * sizeof(real), cudaMemcpyDeviceToHost);
+	cudaMemcpy(cell_info_host.data(), cell_info, _num_cells * sizeof(CellInfo), cudaMemcpyDeviceToHost);
+	cudaMemcpy(particle_info_host.data(), particles_cell_info, _num_particles * sizeof(ParticleCellInfo), cudaMemcpyDeviceToHost);
+
+	check_cell_particle_info_match(
+		cell_info_host,
+		particle_info_host,
+		_num_particles,
+		_num_cells
+	);
+
+	check_energy(
+		cell_mass_host,
+		cell_phi_host,
+		_num_cells
+	);
+
+	check_particles_distribution(
+		cell_info_host
+	);
+
+	check_mass(
+		cell_mass_host,
+		particles_mass.to_vector(),
+		_dx,
+		_domain_l,
+		_nx
+	);
+
+	const int NX = _nx;
+	const int IY = _nx / 2 ;
+	const int IZ = _nx / 2 ;
+
+	// particle_counts
+	{
+		CuDarray<double> particle_counts_(_num_cells);
+		CuCall(countParticles, _over_cells, _over_blocks) (
+			particle_counts_,
+			cell_info,
+			_num_cells
+		);
+
+		auto particle_counts = particle_counts_.to_vector();
+
+		std::ofstream stream{ "particle_counts.txt" };
+		stream << "xi, counts" << std::endl;
+		for (size_t i = 0; i < _nx; ++i) {
+			stream << i << ", " << particle_counts[at(i, IY, IZ)] << std::endl;
+		}
+	}
+
+	// phi cell
+	{
+		std::ofstream stream{ "phi_cell.txt" };
+		stream << "x, phi" << std::endl;
+		for (size_t i = 0; i < _nx; ++i) {
+			double x = -_domain_l + i * _dx;
+			stream << std::format("{}, {:.7f}", x, cell_phi_host[at(i, IY, IZ)]) << std::endl;
+		}
+	}
+
+	// phi from particles
+	{
+		std::ofstream stream{ "phi_part.txt" };
+		stream << "x, phi" << std::endl;
+
+		CuDarray<double> phi_(_num_cells);
+		CuCall(computeCellPhiUnsorted, _over_particles, _over_blocks) (
+			particles_phi,
+			particles_cell_info,
+			cell_info,
+			phi_, // compute
+			_num_particles
+		);
+		auto phi = phi_.to_vector();
+
+		for (size_t i = 0; i < _nx; ++i) {
+			double x = -_domain_l + i * _dx;
+			stream << std::format("{}, {:.7f}", x, phi[at(i, IY, IZ)]) << std::endl;
+		}
+	}
+
+
+	// phi from particles cycle
+	// {
+	// 	zeroCellPhi<<<_over_particles, _over_blocks>>>(
+	// 		particles_phi,
+	// 		_num_particles,
+	// 		0.
+	// 	);
+	// 	zeroCellPhi<<<_over_cells, _over_blocks>>>(
+	// 		cell_phi_dev,
+	// 		_num_cells,
+	// 		100.
+	// 	);
+	// 	cudaDeviceSynchronize();
+	// 	apply_psi_to_particles<<<_over_particles, _over_blocks>>>(
+	// 		particles_phi,
+	// 		cell_phi_dev,
+	// 		cell_info,
+	// 		particles_cell_info,
+	// 		_num_particles
+	// 	);
+	// 	auto err = cudaDeviceSynchronize();
+	// 	printf("apply_psi_to_particles err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+
+	// 	zeroCellPhi<<<_over_cells, _over_blocks>>>(
+	// 		cell_phi_dev,
+	// 		_num_cells,
+	// 		0.
+	// 	);
+	// 	err = cudaDeviceSynchronize();
+	// 	printf("zeroCellPhi err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+
+	// 	computeCellPhiUnsorted<<<_over_particles, _over_blocks>>>(
+	// 		particles_phi,
+	// 		particles_cell_info,
+	// 		cell_info,
+	// 		cell_phi_dev,
+	// 		_num_particles
+	// 	);
+	// 	err = cudaDeviceSynchronize();
+	// 	printf("computeCellPhiUnsorted err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+	// 	cudaMemcpy(cell_phi_host.data(), cell_phi_dev, _num_cells * sizeof(real), cudaMemcpyDeviceToHost);
+
+	// 	std::ofstream stream{ "phi_part_cycle.txt" };
+	// 	stream << "x, phi" << std::endl;
+	// 	const int NX = _nx;
+	// 	for (size_t i = 0; i < _nx; ++i) {
+	// 		int ix = i;
+	// 		int iy = IY;
+	// 		int iz = IZ;
+	// 		double x = -_domain_l + ix * _dx;
+	// 		stream << x << ", " << cell_phi_host[at(ix, iy, iz)] << std::endl;
+	// 	}
+	// }
+
+	// mass
+
+	// acceleration_field<<<blocks_per_grid, threads_per_block>>>(
+	// 	cell_acceleration,
+	// 	phi_dev,
+	// 	cell_mass,
+	// 	_nx,
+	// 	_dx
+	// );
+	// err = cudaDeviceSynchronize();
+	// printf("acceleration_field err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+
+	// if (phi_dev != cell_phi_next) {
+	// 	cudaMemcpy(cell_phi_next, phi_dev, _num_cells * sizeof(real), cudaMemcpyDeviceToDevice);
+	// }
+}
+
 //---Host Function----
 __host__ void print_particles_bin(
 	const char* name,
 	int i0,
 	int icount,
-	const real4* pos,
-	const real4* vel,
+	const std::vector<real4>& pos,
+	const std::vector<real4>& vel,
 	int it,
 	real t
 )
@@ -259,7 +1102,16 @@ __host__ void print_particles_bin(
 	printf("print particles fin\n");
 }
 
-__host__ void  result(real4 *pos, real4 *vel, real2 *mass, int it, real t, real *PSI, int it_all) {
+__host__ void  result(
+	const std::vector<real4>& pos,
+	const std::vector<real4>& vel,
+	const std::vector<real2>& mass,
+	int it,
+	real t,
+	const std::vector<real>& PSI,
+	int it_all
+)
+{
 	printf("print result begin\n");
 
 	FILE *outf;
@@ -721,31 +1573,68 @@ int main(int argc, char * argv[])
 	printf("*****c_psi_h = %g \n", c_psi_h);
 	printf("*****c_psi_b = %g \n", c_psi_b);
 
+    constexpr int _nx = 200;
+    constexpr double _dx = 0.1;
+    constexpr double _domain_l = 0.5 * _nx * _dx;
+	constexpr double _c_wave = 4574.337022617616;
+	const double _dt_wave = 0.5 * _dx / (_c_wave * sqrt(3));
+	const double _diss_base = 0.1;
+	const double _diss_extra = 0.01;
+	const double _sim_l = _domain_l;
+	const double _bc_l = _domain_l / 10.;
+	const int _iterations = 500;
+
+    real4 _domain_min{
+        -_domain_l,
+        -_domain_l,
+        -_domain_l,
+		0.
+    };
+    real4 _domain_max{
+        _domain_l,
+        _domain_l,
+        _domain_l,
+		0.
+    };
+    real4 _cell_size{
+        _dx,
+        _dx,
+        _dx,
+		0.
+    };
+    int3 _grid_size{
+        _nx,
+        _nx,
+        _nx
+    };
+    int _num_particles = NN;
+    int _num_cells = _nx * _nx * _nx;
+    int _num_cell_blocks = (_num_cells + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int _num_particle_blocks = (_num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    int _over_cells = _num_cell_blocks;
+    int _over_particles = _num_particle_blocks;
+    int _over_blocks = BLOCK_SIZE;
+	printf("_num_particles: %d\n", _num_particles);
+	printf("_num_cells: %d\n", _num_cells);
+	printf("_num_cell_blocks: %d\n", _num_cell_blocks);
+	printf("_num_particle_blocks: %d\n", _num_particle_blocks);
+	printf("_over_cells: %d\n", _over_cells);
+	printf("_over_particles: %d\n", _over_particles);
+	printf("_over_blocks: %d\n", _over_blocks);
+	printf("_grid_size: (%d, %d, %d)\n", _grid_size.x, _grid_size.y, _grid_size.z);
 
 	//-----Allocate Massiv Host-----------------------------
-	real4 *pos_host = new real4[NN];
-	real4 *vel_host = new real4[NN];
-	real2 *mass_host = new real2[NN];
-	real *eps2_p = new real[NN];
-  	real *PSI_host = new real[NN];
+	printf("allocate memory HOST\n");
+	std::vector<real4> pos_host(NN, make_real4(0., 0., 0., 0.));
+	std::vector<real4> vel_host(NN, make_real4(0., 0., 0., 0.));
+	std::vector<real2> mass_host(NN, make_real2(0., 0.));
+	std::vector<real> eps2_host(NN, 0.);
+	std::vector<real> psi_host(NN, 0.);
+
+	std::vector<real> cell_mass_host(_num_cells, 0.);
+	std::vector<real> cell_phi_host(_num_cells,  0.);
+
 	//-----------------------------------------------------
-
-	for (i = 0; i < NN; i++) {
-		pos_host[i].x = 0.0;
-		pos_host[i].y = 0.0;
-		pos_host[i].z = 0.0;
-		pos_host[i].w = 0.0;
-
-		vel_host[i].x = 0.0;
-		vel_host[i].y = 0.0;
-		vel_host[i].z = 0.0;
-		vel_host[i].w = 0.0;
-
-		mass_host[i].x = 0.0;
-		mass_host[i].y = 0.0;
-
-		PSI_host[i] = 0.0;
-	}
 
 	d.Ns = Ns;
 	d.NN = NN;
@@ -762,6 +1651,18 @@ int main(int argc, char * argv[])
 	d.c_psi_h = c_psi_h;
 	d.c_psi_b = c_psi_b;
 	d.eps2 = eps2;
+	d.domainMin = _domain_min;
+	d.domainMax = _domain_max;
+	d.cellSize = _cell_size;
+	d.gridSize  = _grid_size;
+	d.dx_wave = _dx;
+	d.dt_wave = _dt_wave;
+	d.c_wave = _c_wave;
+	d.nx_wave = _nx;
+	d.diss_base = _diss_base;
+	d.diss_extra = _diss_extra;
+	d.sim_l = _sim_l;
+	d.bc_l = _bc_l;
 
 	int it = 1, // save num
 		itt = 1,
@@ -786,7 +1687,7 @@ int main(int argc, char * argv[])
 				fread(&vel_host[i].y, sizeof(double), 1, outf);
 				fread(&vel_host[i].z, sizeof(double), 1, outf);
 				mass_host[i].x = mp_s[k];
-				eps2_p[i] = eps_s[k]*eps_s[k];
+				eps2_host[i] = eps_s[k]*eps_s[k];
 			}
 			n0 += N_s[k];
 		}
@@ -807,7 +1708,7 @@ int main(int argc, char * argv[])
 					fread(&vel_host[i].y, sizeof(double), 1, outf);
 					fread(&vel_host[i].z, sizeof(double), 1, outf);
 					mass_host[i].x = mp_dm[k];
-					eps2_p[i] = eps_dm[k]*eps_dm[k];
+					eps2_host[i] = eps_dm[k]*eps_dm[k];
 				}
 				n0 += N_dm[k];
 			}
@@ -873,7 +1774,7 @@ int main(int argc, char * argv[])
 							+ vel_host[i].z * cos(alpha_glx[k])
 							- vel_host[i].x * sin(alpha_glx[k]);
 
-						eps2_p[i] = eps_s[k]*eps_s[k];
+						eps2_host[i] = eps_s[k]*eps_s[k];
               		}
           		}
 				fclose(outf);
@@ -923,7 +1824,7 @@ int main(int argc, char * argv[])
 							+ vel_host[i].z * cos(alpha_glx[k])
 							- vel_host[i].x * sin(alpha_glx[k]);
 
-						eps2_p[i] = eps_dm[k]*eps_dm[k];
+						eps2_host[i] = eps_dm[k]*eps_dm[k];
 					}
 				}
 				fclose(outf);
@@ -938,285 +1839,103 @@ int main(int argc, char * argv[])
 	printf("***Start GPU***\n");
 
 	//-----Allocate Massiv GPU--------------------------------------
-	real4 **pos_dev = new real4*[nGPU];
-	real4 **vel_dev = new real4*[nGPU];
-	real4 **post_dev = new real4*[nGPU];
-	real4 **velt_dev = new real4*[nGPU];
-	real3 **ACC_dev = new real3*[nGPU];
-	real3 **ACC_devt = new real3*[nGPU];
-	real2 **mass_dev = new real2*[nGPU];
-	real **eps2_dev = new real*[nGPU];
-  	real **PSI_dev = new real*[nGPU];
-	//real *dt_dev;
+
+	printf("allocate memory GPU %d\n", i);
+	CuDarray<real4> pos_(pos_host);
+	CuDarray<real4> vel_(vel_host);
+	CuDarray<real2> mass_(mass_host);
+	CuDarray<real> eps2_(eps2_host);
+	CuDarray<real> psi_(psi_host);
+	CuDarray<real4> post_(_num_particles);
+	CuDarray<real4> velt_(_num_particles);
+	CuDarray<real3> acc_(_num_particles);
+	CuDarray<real3> acct_(_num_particles);
+
 	int Nk = NN / nGPU;
 
-	printf("allocate memory HOST\n");
+	CuDarray<CellInfo> cell_info_(_num_cells);
+	CuDarray<int> cell_particles_count_(_num_cells);
+	CuDarray<real> cell_mass_(_num_cells);
+	CuDarray<real> cell_phi_prev_(_num_cells);
+	CuDarray<real> cell_phi_curr_(_num_cells);
+	CuDarray<real> cell_phi_next_(_num_cells);
+	CuDarray<real3> cell_acceleration_(_num_cells);
 
-#pragma omp parallel num_threads(nGPU) default(shared)
-	{
-#pragma omp for schedule(static,1) private(i)
-		for (i = 0; i < nGPU; i++) {
-			printf("allocate memory GPU %d\n", i);
-			cudaSetDevice(deviceId[i]);
-			cudaMalloc((void**)&pos_dev[i], Nk * sizeof(real4));
-			cudaMalloc((void**)&vel_dev[i], Nk * sizeof(real4));
-			cudaMalloc((void**)&post_dev[i], Nk * sizeof(real4));
-			cudaMalloc((void**)&velt_dev[i], Nk * sizeof(real4));
-			cudaMalloc((void**)&mass_dev[i], Nk * sizeof(real2));
-			cudaMalloc((void**)&ACC_dev[i], Nk * sizeof(real3));
-			cudaMalloc((void**)&ACC_devt[i], Nk * sizeof(real3));
-			cudaMalloc((void**)&eps2_dev[i], Nk * sizeof(real));
-			cudaMalloc((void**)&PSI_dev[i], Nk * sizeof(real));
-			//Copy data CPU to GPU
-			cudaMemcpy(pos_dev[i], pos_host + i*Nk, Nk * sizeof(real4), cudaMemcpyHostToDevice);
-			cudaMemcpy(vel_dev[i], vel_host + i*Nk, Nk * sizeof(real4), cudaMemcpyHostToDevice);
-			cudaMemcpy(mass_dev[i], mass_host + i*Nk, Nk * sizeof(real2), cudaMemcpyHostToDevice);
-			cudaMemcpy(eps2_dev[i], eps2_p + i*Nk, Nk * sizeof(real), cudaMemcpyHostToDevice);
-			cudaMemcpy(PSI_dev[i], PSI_host + i*Nk, Nk * sizeof(real), cudaMemcpyHostToDevice);
-			//DataBlock dd --- GPU
-			cudaMemcpyToSymbol(dd, &d, sizeof(DataBlock), 0, cudaMemcpyHostToDevice);
-			cudaDeviceSynchronize();
+	CuDarray<ParticleCellInfo> particles_cell_info_(_num_particles);
 
-			int threadNum(omp_get_thread_num());
-			printf("deviceId=%d,  threadCPU=%d\n", deviceId[i], threadNum);
-		}
-#pragma omp barrier
-		//------Расчет грав. сил-----------------------------------------------------
-		printf("calc grav forces: acc zero\n");
-#pragma omp for schedule(static,1) private(i)
-		for (i = 0; i < nGPU; i++){
-			cudaSetDevice(deviceId[i]);
-			ACC_Zero<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(ACC_dev[i]);
-			cudaDeviceSynchronize();
-		}
-#pragma omp barrier
+	CuDarray<int> particles_in_block_(_num_cell_blocks);
 
-		printf("calc grav forces: psi and acceleration\n");
-		printf("Nk: %d\n", Nk);
-#pragma omp for schedule(static,1) private(i,j)
-		for (i = 0; i < nGPU; i++) {
-			cudaSetDevice(deviceId[i]);
-			for (j = 0; j < nGPU; j++) {
-				if (j != i) {
-					ACCEL<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(ACC_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
-					cudaDeviceSynchronize();
-					PSI_kernel<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
-					cudaDeviceSynchronize();
-				}
-				else {
-					ACCEL<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(ACC_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
-					cudaDeviceSynchronize();
-					PSI_kernel<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(PSI_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
-					cudaDeviceSynchronize();
-				}
-			}
-		}
+	CuCopyToSymbol(d, dd, ToDevice);
+	CuDeviceSync();
 
-#pragma omp barrier
-		printf("calc grav forces: copy to host\n");
-#pragma omp for schedule(static,1) private(i)
-		for (i = 0; i < nGPU; i++) {
-			cudaSetDevice(deviceId[i]);
-			cudaMemcpy(PSI_host + i*Nk, PSI_dev[i], Nk * sizeof(real), cudaMemcpyDeviceToHost);
-			cudaDeviceSynchronize();
-		}
-#pragma omp barrier
-	}
+	//------Расчет грав. сил-----------------------------------------------------
+	printf("calc grav forces\n");
+	CuCall(PSI_kernel, Nk / BLOCK_SIZE, BLOCK_SIZE) (
+		psi_,
+		pos_,
+		pos_,
+		mass_,
+		eps2_
+	);
+
+	convert_particles(
+		psi_,
+		pos_,
+		mass_,
+		cell_info_,
+		cell_particles_count_,
+		particles_in_block_,
+		particles_cell_info_,
+		cell_mass_,
+		cell_phi_prev_,
+		cell_phi_curr_,
+		cell_phi_next_,
+		cell_acceleration_,
+		_over_cells,
+		_over_blocks,
+		_over_particles,
+		_num_cells,
+		_num_cell_blocks,
+		_num_particles,
+		_domain_l,
+		_nx,
+		_dx,
+		_iterations,
+		true
+	);
+
+	// apply_acceleration_to_particles<<<_over_particles, _over_blocks>>>(
+	// 	acc_,
+	// 	cell_acceleration_,
+	// 	particles_cell_info_,
+	// 	_num_particles
+	// );
+	// auto err = cudaDeviceSynchronize();
+	// printf("apply_acceleration_to_particles err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+
+	// apply_psi_to_particles<<<_over_particles, _over_blocks>>>(
+	// 	psi_,
+	// 	cell_phi_next_,
+	// 	cell_info_,
+	// 	particles_cell_info_,
+	// 	_num_particles
+	// );
+	// err = cudaDeviceSynchronize();
+	// printf("apply_psi_to_particles err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+
+	printf("calc grav forces: copy to host\n");
+	psi_.to_vector(psi_host);
 
 	if(it == 1) {
 		printf("***Start result t=0***\n");
-		result(pos_host, vel_host, mass_host, 0, 0.0, PSI_host, 0);
+		result(pos_host, vel_host, mass_host, 0, 0.0, psi_host, 0);
 	}
 
-	cudaSetDevice(deviceId[0]);
-	cudaEventCreate(&start1);
-	cudaEventCreate(&stop1);
-
-	cudaEventCreate(&start);
-	cudaEventCreate(&stop);
-	cudaEventRecord(start, 0);
-
-	printf("is_grav = %d  it = %d  itg = %d\n", is_grav, it, itg);
-	printf("t = %g  tgrav = %g  tsave = %g\n", t, tgrav, tsave);
-
-	do {
-		// --- Nbody и самогравитация
-		cudaEventRecord(start1, 0);
-#pragma omp parallel num_threads(nGPU) default(shared)
-		{
-			//------Nbody predictor (tn+dtgrav)----------------------------------------------------------------------------
-			printf("Nbody predictor %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
-#pragma omp for schedule(static,1) private(i)
-			for (i = 0; i < nGPU; i++) {
-				cudaSetDevice(deviceId[i]);
-				kernelNbody_integTime<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(ACC_dev[i], post_dev[i], velt_dev[i], pos_dev[i], vel_dev[i], dtgrav, 0, tgrav - dtgrav, ACC_dev[i]);
-				cudaDeviceSynchronize();
-			}
-#pragma omp barrier
-			//------Расчет самогравитации Nbody частиц-----------------------------------------------------
-			printf("Nbody grav %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
-#pragma omp for schedule(static,1) private(i)
-			for (i = 0; i < nGPU; i++) {
-				cudaSetDevice(deviceId[i]);
-				ACC_Zero<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(ACC_devt[i]);
-				cudaDeviceSynchronize();
-			}
-#pragma omp barrier
-#pragma omp for schedule(static,1) private(i,j)
-			for (i = 0; i < nGPU; i++) {
-				cudaSetDevice(deviceId[i]);
-				for (j = 0; j < nGPU; j++) {
-					if (j != i) {
-						ACCEL<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(ACC_devt[i], post_dev[i], post_dev[j], mass_dev[j], eps2_dev[j]);
-						cudaDeviceSynchronize();
-					}
-					else {
-						ACCEL<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(ACC_devt[i], post_dev[i], post_dev[i], mass_dev[i], eps2_dev[i]);
-						cudaDeviceSynchronize();
-					}
-				}
-			}
-#pragma omp barrier
-			//------Nbody corrector (tn+dtgrav)----------------------------------------------------------------------------
-			printf("Nbody corrector %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
-#pragma omp for schedule(static,1) private(i)
-			for (i = 0; i < nGPU; i++) {
-				cudaSetDevice(deviceId[i]);
-				kernelNbody_integTime<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(ACC_devt[i], pos_dev[i], vel_dev[i], post_dev[i], velt_dev[i], dtgrav, 1, tgrav, ACC_dev[i]);
-				cudaDeviceSynchronize();
-			}
-#pragma omp barrier
-			//----------------------------------------------------------------------------------------------------------------------
-		}
-		cudaSetDevice(deviceId[0]);
-		cudaEventRecord(stop1, 0);
-		cudaEventSynchronize(stop1);
-		cudaEventElapsedTime(&gpuTime1, start1, stop1);
-		printf("predictor-grav-corrector time: %lf s\n", gpuTime1 * TIME2SEC);
-		gpuTime_GFC += gpuTime1;
-		printf("passed time from last save: %lf s\n", gpuTime_GFC * TIME2SEC);
-		ittg++;
-		itg++;
-		t = tgrav;
-		tgrav = itg * dtgrav;
-		it_grav++;
-
-		if (it_grav >= is_grav) {
-			tsave = tgrav;
-			//Copy data GPU to CPU
-			printf("Copy data GPU to CPU: redo PSI_kernel\n");
-#pragma omp parallel num_threads(nGPU) default(shared)
-			{
-				for (i = 0; i < nGPU; i++){
-					cudaSetDevice(deviceId[i]);
-					PSI_Zero<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(PSI_dev[i]);
-					cudaDeviceSynchronize();
-				}
-#pragma omp barrier
-#pragma omp for schedule(static,1) private(i,j)
-				for (i = 0; i < nGPU; i++) {
-					cudaSetDevice(deviceId[i]);
-					for (j = 0; j < nGPU; j++) {
-						if (j != i) {
-							PSI_kernel<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
-							cudaDeviceSynchronize();
-						}
-						else {
-							PSI_kernel<<<Nk / BLOCK_SIZE, BLOCK_SIZE>>>(PSI_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
-							cudaDeviceSynchronize();
-						}
-					}
-				}
-#pragma omp barrier
-				printf("Copy data GPU to CPU\n");
-#pragma omp for schedule(static,1) private(i)
-				for (i = 0; i < nGPU; i++){
-					cudaSetDevice(deviceId[i]);
-					cudaMemcpy(pos_host + i*Nk, pos_dev[i], Nk * sizeof(real4), cudaMemcpyDeviceToHost);
-					cudaMemcpy(vel_host + i*Nk, vel_dev[i], Nk * sizeof(real4), cudaMemcpyDeviceToHost);
-					cudaMemcpy(mass_host + i*Nk, mass_dev[i], Nk * sizeof(real2), cudaMemcpyDeviceToHost);
-					cudaMemcpy(PSI_host + i*Nk, PSI_dev[i], Nk * sizeof(real), cudaMemcpyDeviceToHost);
-					cudaDeviceSynchronize();
-				}
-#pragma omp barrier
-			}
-			cudaSetDevice(deviceId[0]);
- 			cudaEventRecord(stop, 0);
-			cudaEventSynchronize(stop);
-			cudaEventElapsedTime(&gpuTime, start, stop);
-			printf("time between saves: %g s", gpuTime * TIME2SEC);
-
-			//-------------------------------------------------------------------------------------
-			gpuTime = gpuTime_GFC / itt;
-			printf("--------------------------------------------------------------------------------\n");
-			outf = (it == 1)
-				? fopen("time_frame.dat", "w")
-				: fopen("time_frame.dat", "a");
-			fprintf(outf, "%d %g %g %g %g\n",
-				it * itt,
-				t,
-				TIME2SEC * gpuTime_GFC,
-				TIME2SEC * gpuTime_US,
-				TIME2SEC * (gpuTime_US + gpuTime_GFC)
-			);
-			fclose(outf);
-
-			printf("<Time_frame> = %.3f s, frame = %d, iter = %d, iter_g = %d\n",
-				TIME2SEC * gpuTime,
-				it,
-				itt,
-				ittg
-			);
-			printf("Time = (%g,  %g) ---  dt = (%g,  %g)\n",
-				t,
-				tgrav - dtgrav,
-				dtsave / itt,
-				dtgrav
-			);
-			printf("t_GFC = %g s, t_US = %g\n",
-				TIME2SEC * gpuTime_GFC / ittg,
-				TIME2SEC * gpuTime_US / itt
-			);
-
-
-			i = 1;
-			printf("i=%d :: rho[i] = %g  e[i] = %g  h[i] = %g\n", i, pos_host[i].w, vel_host[i].w, mass_host[i].y);
-
-			fi = atan2(pos_host[i].y, pos_host[i].x);
-			r = sqrt(pos_host[i].x*pos_host[i].x + pos_host[i].y*pos_host[i].y);
-			vr = (vel_host[i].x*pos_host[i].x + vel_host[i].y*pos_host[i].y) / r;
-			vfi = (vel_host[i].y*pos_host[i].x - vel_host[i].x*pos_host[i].y) / r;
-			printf("Vr[i] = %g  Vfi[i] = %g  Vz[i] = %g\n", vr, vfi, vel_host[i].z);
-			printf("r[i] = %g  fi[i] = %g  z[i] = %g\n", r, fi, pos_host[i].z);
-
-			result(pos_host, vel_host, mass_host, it, t, PSI_host, it*itt);
-
-			tsave += dtsave; it++;
-			itt = 0; ittg = 0;
-			it_grav = 0;
-			cudaEventRecord(start, 0);
-			gpuTime_GFC = 0.0;
-			gpuTime_US = 0.0;
-		}
-		itt++;
-	} while (t < tmax);
-
-	delete pos_host, vel_host, mass_host;
 	for (i = 0; i < nGPU; i++){
 		cudaSetDevice(deviceId[i]);
 		for (j = 0; j < nGPU; j++){
 			if (j != i) cudaDeviceDisablePeerAccess(deviceId[j]);
 		}
-	}
-	for (i = 0; i < nGPU; i++){
-		cudaSetDevice(deviceId[i]);
-		cudaFree(pos_dev[i]);
-		cudaFree(post_dev[i]);
-		cudaFree(vel_dev[i]);
-		cudaFree(velt_dev[i]);
-		cudaFree(mass_dev[i]);
-		cudaFree(ACC_dev[i]);
-		cudaFree(ACC_devt[i]);
 	}
 
 	return 0;

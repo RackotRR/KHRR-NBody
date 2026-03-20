@@ -1,0 +1,224 @@
+#pragma once
+#include "cuda_runtime.h"
+#include <stdexcept>
+#include <format>
+#include <cstdint>
+#include <cstdlib>
+#include <vector>
+
+namespace RR::CUDA {
+
+    constexpr cudaMemcpyKind ToDevice = cudaMemcpyHostToDevice;
+    constexpr cudaMemcpyKind ToHost = cudaMemcpyDeviceToHost;
+    constexpr cudaMemcpyKind DeviceToDevice = cudaMemcpyDeviceToDevice;
+
+
+    template<typename T>
+    void CuCopyToSymbol(const T& from, T& to, int kind) {
+        auto result = cudaMemcpyToSymbol(
+            to,
+            &from,
+            sizeof(T),
+            0,
+            (cudaMemcpyKind)kind
+        );
+
+        if (result != cudaSuccess) {
+            throw std::runtime_error{
+                std::format(
+                    "cudaMemcpyToSymbol error: {} ({})",
+                    cudaGetErrorName(result),
+                    cudaGetErrorString(result)
+                )
+            };
+        }
+    }
+
+    void CuDeviceSync() {
+        auto result = cudaDeviceSynchronize();
+
+        if (result != cudaSuccess) {
+            throw std::runtime_error{
+                std::format(
+                    "cudaDeviceSynchronize error: {} ({})",
+                    cudaGetErrorName(result),
+                    cudaGetErrorString(result)
+                )
+            };
+        }
+    }
+
+    template<typename FuncT>
+    struct CuCallImpl {
+        FuncT func;
+        dim3 blocks_per_grid;
+        dim3 threads_per_block;
+
+        template<typename... Args>
+        auto operator() (Args&&... args) {
+            func<<<blocks_per_grid, threads_per_block>>>(args...);
+            auto result = cudaDeviceSynchronize();
+            if (result != cudaSuccess) {
+                throw std::runtime_error{
+                    std::format(
+                        "cuda kernel error: {} ({})",
+                        cudaGetErrorName(result),
+                        cudaGetErrorString(result)
+                    )
+                };
+            }
+        }
+    };
+
+    template<typename FuncT>
+    CuCallImpl<FuncT> CuCall(
+        FuncT func,
+        const dim3& blocks_per_grid,
+        const dim3& threads_per_block
+    )
+    {
+        return CuCallImpl<FuncT>{ func, blocks_per_grid, threads_per_block };
+    }
+
+    class CuDarrayBase {
+    public:
+        static size_t get_total_allocated_mb() {
+            return total_allocated / 1024 / 1024;
+        }
+    protected:
+        static void add_alloc(size_t bytes) {
+            total_allocated += bytes;
+        }
+        static void remove_alloc(size_t bytes) {
+            total_allocated -= bytes;
+        }
+    private:
+        inline static size_t total_allocated = 0;
+    };
+
+    template<typename T>
+    class CuDarray : public CuDarrayBase {
+    public:
+        CuDarray(size_t N_)
+            : ptr{ alloc(N_) }
+            , N{ N_ }
+        {
+            CuDarrayBase::add_alloc(get_allocated());
+            set_zero();
+        }
+        CuDarray(const std::vector<T>& host)
+            : ptr{ alloc(host.size()) }
+            , N{ host.size() }
+        {
+            CuDarrayBase::add_alloc(get_allocated());
+            copy_vector(host);
+        }
+        ~CuDarray() {
+            cudaFree(ptr);
+            CuDarrayBase::remove_alloc(get_allocated());
+        }
+        CuDarray(const CuDarray&) = delete;
+        CuDarray(CuDarray&&) noexcept = delete;
+        auto& operator=(const CuDarray&) = delete;
+        auto& operator=(CuDarray&&) noexcept = delete;
+
+        void set_zero() {
+            auto result = cudaMemset(ptr, 0, get_allocated());
+            if (result != cudaSuccess) {
+                throw std::runtime_error{
+                    std::format(
+                        "cudaMemset error: {} ({})",
+                        cudaGetErrorName(result),
+                        cudaGetErrorString(result)
+                    )
+                };
+            }
+
+            CuDeviceSync();
+        }
+
+        void copy_vector(const std::vector<T>& host) {
+            if (host.size() != N) {
+                throw std::runtime_error{ "CuDarray::copy_vector size mismatch" };
+            }
+
+            auto result = cudaMemcpy(ptr, host.data(), get_allocated(), ToDevice);
+            if (result != cudaSuccess) {
+                throw std::runtime_error{
+                    std::format(
+                        "cudaMemcpy error: {} ({})",
+                        cudaGetErrorName(result),
+                        cudaGetErrorString(result)
+                    )
+                };
+            }
+
+            CuDeviceSync();
+        }
+        void to_vector(std::vector<T>& host) const {
+            host.resize(N);
+            auto result = cudaMemcpy(host.data(), ptr, get_allocated(), ToHost);
+            if (result != cudaSuccess) {
+                throw std::runtime_error{
+                    std::format(
+                        "cudaMemcpy error: {} ({})",
+                        cudaGetErrorName(result),
+                        cudaGetErrorString(result)
+                    )
+                };
+            }
+
+            CuDeviceSync();
+        }
+        std::vector<T> to_vector() const {
+            std::vector<T> host;
+            to_vector(host);
+            return host;
+        }
+
+        size_t get_allocated() const {
+            return N * sizeof(T);
+        }
+
+        operator T* () const {
+            return ptr;
+        }
+
+        void swap(CuDarray<T>& other) noexcept {
+            std::swap(ptr, other.ptr);
+            std::swap(N, other.N);
+        }
+
+    private:
+        static T* alloc(size_t N) {
+            T* ptr = nullptr;
+
+            size_t need_mem = sizeof(T) * N;
+            auto result = cudaMalloc(
+                (void**)&ptr,
+                need_mem
+            );
+
+            if (result != cudaSuccess) {
+                throw std::runtime_error{
+                    std::format(
+                        "cudaMalloc error: {} ({})",
+                        cudaGetErrorName(result),
+                        cudaGetErrorString(result)
+                    )
+                };
+            }
+
+            return ptr;
+        }
+    private:
+        T* ptr = nullptr;
+        size_t N = 0;
+    };
+
+    template<typename T>
+    inline void swap(CuDarray<T>& left, CuDarray<T>& right) noexcept {
+        left.swap(right);
+    }
+
+}
