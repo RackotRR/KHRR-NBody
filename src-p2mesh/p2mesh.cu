@@ -1,3 +1,5 @@
+// алгоритм основан на статье
+// Khrapov, Khoperskov 2017 - Smoothed-Particle Hydrodynamics Models: Implementation Features on GPUs
 
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
@@ -8,7 +10,6 @@
 #include <fstream>
 #include <iostream>
 #include <format>
-#include <span>
 
 #define PI 3.14159265358979
 #define BLOCK_SIZE 512

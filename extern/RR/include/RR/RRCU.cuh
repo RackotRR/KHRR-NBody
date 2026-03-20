@@ -12,6 +12,19 @@ namespace RR::CUDA {
     constexpr cudaMemcpyKind ToHost = cudaMemcpyDeviceToHost;
     constexpr cudaMemcpyKind DeviceToDevice = cudaMemcpyDeviceToDevice;
 
+    void CuDeviceSync() {
+        auto result = cudaDeviceSynchronize();
+
+        if (result != cudaSuccess) {
+            throw std::runtime_error{
+                std::format(
+                    "cudaDeviceSynchronize error: {} ({})",
+                    cudaGetErrorName(result),
+                    cudaGetErrorString(result)
+                )
+            };
+        }
+    }
 
     template<typename T>
     void CuCopyToSymbol(const T& from, T& to, int kind) {
@@ -22,25 +35,12 @@ namespace RR::CUDA {
             0,
             (cudaMemcpyKind)kind
         );
+        CuDeviceSync();
 
         if (result != cudaSuccess) {
             throw std::runtime_error{
                 std::format(
                     "cudaMemcpyToSymbol error: {} ({})",
-                    cudaGetErrorName(result),
-                    cudaGetErrorString(result)
-                )
-            };
-        }
-    }
-
-    void CuDeviceSync() {
-        auto result = cudaDeviceSynchronize();
-
-        if (result != cudaSuccess) {
-            throw std::runtime_error{
-                std::format(
-                    "cudaDeviceSynchronize error: {} ({})",
                     cudaGetErrorName(result),
                     cudaGetErrorString(result)
                 )
