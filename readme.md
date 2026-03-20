@@ -1,3 +1,6 @@
+compiling.ini
+nvcc Nbody-CUDA_nGPU_v2_1.cu -arch=sm_70 -Xcompiler -fopenmp -o nGPU.out
+
 __start_nbody.ini:
     i_cont - номер итерации, которую будем искать в bin;
         либо, если 0, прочитаем из start_DM0.txt и start_S0.txt

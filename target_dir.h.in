@@ -1,0 +1,5 @@
+#pragma once
+#include <filesystem>
+
+namespace fs = std::filesystem;
+const auto BASE_PATH = fs::path{ "@CMAKE_SOURCE_DIR@" }.make_preferred() / "data" / "nbody";

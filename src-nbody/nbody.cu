@@ -11,13 +11,15 @@
 #include <map>
 #include <numeric>
 
-#include "RRCU.cuh"
+#include <RR/RRCU.cuh>
 
 #include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <tuple>
+
+#include "target_dir.h"
 
 #define PI 3.14159265358979
 #define BLOCK_SIZE 512
@@ -770,7 +772,7 @@ auto check_particles_distribution(
 )
 {
 	std::map<int, int> dist;
-	std::ofstream stream{"particles_in_cell.txt"};
+	std::ofstream stream{ DEBUG_PATH / "particles_in_cell.txt"};
 	stream << "n_particles, cells_with_so_many_particles" << std::endl;
 
 	for (const auto& info : cell_info) {
@@ -787,7 +789,7 @@ auto check_particles_distribution(
 		partial_counts_prev = partial_counts.back();
 	}
 
-	std::ofstream stream_partial_sum{ "particles_in_cell_partial_sum.txt" };
+	std::ofstream stream_partial_sum{ DEBUG_PATH / "particles_in_cell_partial_sum.txt" };
 	for (size_t i = 1; i < partial_counts.size(); ++i) {
 		stream_partial_sum << i << ", " << partial_counts[i] << std::endl;
 	}
@@ -804,7 +806,7 @@ auto check_mass(
 	int IY = NX / 2;
 	int IZ = NX / 2;
 
-	std::ofstream stream{ "mass_part.txt" };
+	std::ofstream stream{ DEBUG_PATH / "mass_part.txt" };
 	stream << "x, mass" << std::endl;
 	for (size_t i = 0; i < NX; ++i) {
 		double x = -_domain_l + i * _dx;
@@ -960,7 +962,7 @@ auto convert_particles(
 
 		auto particle_counts = particle_counts_.to_vector();
 
-		std::ofstream stream{ "particle_counts.txt" };
+		std::ofstream stream{ DEBUG_PATH / "particle_counts.txt" };
 		stream << "xi, counts" << std::endl;
 		for (size_t i = 0; i < _nx; ++i) {
 			stream << i << ", " << particle_counts[at(i, IY, IZ)] << std::endl;
@@ -969,7 +971,7 @@ auto convert_particles(
 
 	// phi cell
 	{
-		std::ofstream stream{ "phi_cell.txt" };
+		std::ofstream stream{ DEBUG_PATH / "phi_cell.txt" };
 		stream << "x, phi" << std::endl;
 		for (size_t i = 0; i < _nx; ++i) {
 			double x = -_domain_l + i * _dx;
@@ -979,7 +981,7 @@ auto convert_particles(
 
 	// phi from particles
 	{
-		std::ofstream stream{ "phi_part.txt" };
+		std::ofstream stream{ DEBUG_PATH / "phi_part.txt" };
 		stream << "x, phi" << std::endl;
 
 		CuDarray<double> phi_(_num_cells);
@@ -1041,7 +1043,7 @@ auto convert_particles(
 	// 	printf("computeCellPhiUnsorted err: %d (%s)\n", (int)err, cudaGetErrorName(err));
 	// 	cudaMemcpy(cell_phi_host.data(), cell_phi_dev, _num_cells * sizeof(real), cudaMemcpyDeviceToHost);
 
-	// 	std::ofstream stream{ "phi_part_cycle.txt" };
+	// 	std::ofstream stream{ DEBUG_PATH / "phi_part_cycle.txt" };
 	// 	stream << "x, phi" << std::endl;
 	// 	const int NX = _nx;
 	// 	for (size_t i = 0; i < _nx; ++i) {
@@ -1082,12 +1084,12 @@ __host__ void print_particles_bin(
 )
 {
 	printf("print particles bin %s\n", name);
-	FILE *outf;
-	char buffer[24];
 	int i;
 
-	sprintf(buffer, "bin/%s_%5d.bin", name, it);
-	outf = fopen(buffer, "wb");
+	auto path = BIN_PATH / std::format("{}_{:5}.bin", name, it);
+	auto path_str = path.string();
+
+	FILE *outf = fopen(path_str.c_str(), "wb");
 	fwrite(&icount, sizeof(int), 1, outf);
 	fwrite(&t, sizeof(double), 1, outf);
 	for (i = i0; i < i0 + icount; ++i) {
@@ -1181,7 +1183,10 @@ __host__ void  result(
 		Imp0.y = Imp.y;
 		Imp0.z = Imp.z;
     	E0=E;
-		outf = fopen("LIE_0.bin", "wb");
+
+		auto path = BIN_PATH / "LIE_0.bin";
+		auto path_str = path.string();
+		outf = fopen(path_str.c_str(), "wb");
 		fwrite(&L0, sizeof(real3), 1, outf);
 		fwrite(&Imp0, sizeof(real3), 1, outf);
       	fwrite(&E0, sizeof(real), 1, outf);
@@ -1235,66 +1240,82 @@ __host__ void  result(
 		E / E0 - 1.0
 	);
 
-	outf = (it == 0)
-		? fopen("Lz(t).dat", "w")
-		: fopen("Lz(t).dat", "a");
-	fprintf(outf, "%d %f %1.15f %g %g\n",
-		it_all,
-		t,
-		L.z,
-		L.z / L0.z - 1.0,
-		fabs(L.z / L0.z - 1.0)
-	);
-	fclose(outf);
+	{
+		auto path = OUT_PATH / "Lz(t).dat";
+		auto path_str = path.string();
+		FILE* outf = (it == 0)
+			? fopen(path_str.c_str(), "w")
+			: fopen(path_str.c_str(), "a");
+		fprintf(outf, "%d %f %1.15f %g %g\n",
+			it_all,
+			t,
+			L.z,
+			L.z / L0.z - 1.0,
+			fabs(L.z / L0.z - 1.0)
+		);
+		fclose(outf);
+	}
 
-	outf = (it == 0)
-		? fopen("LL(t).dat", "w")
-		: fopen("LL(t).dat", "a");
-	fprintf(outf, "%d %f %1.15f %g %g\n",
-		it_all,
-		t,
-		LL,
-		LL / LL0 - 1.0,
-		fabs(LL / LL0 - 1.0)
-	);
-	fclose(outf);
+	{
+		auto path = OUT_PATH / "LL(t).dat";
+		auto path_str = path.string();
+		FILE* outf = (it == 0)
+			? fopen(path_str.c_str(), "w")
+			: fopen(path_str.c_str(), "a");
+		fprintf(outf, "%d %f %1.15f %g %g\n",
+			it_all,
+			t,
+			LL,
+			LL / LL0 - 1.0,
+			fabs(LL / LL0 - 1.0)
+		);
+		fclose(outf);
+	}
 
-	outf = (it == 0)
-		? fopen("Imp(t).dat", "w")
-		: fopen("Imp(t).dat", "a");
-	real Impls = sqrt(
-		Imp.x * Imp.x +
-		Imp.y * Imp.y +
-		Imp.z * Imp.z
-	);
-	real Impls0 = sqrt(
-		Imp0.x * Imp0.x +
-		Imp0.y * Imp0.y +
-		Imp0.z * Imp0.z
-	);
-	fprintf(outf, "%d %f %1.15f %g %g %g\n",
-		it_all,
-		t,
-		Impls,
-		Impls - Impls0,
-		Impls / Impls0 - 1.0,
-		fabs(Impls / Impls0 - 1.0)
-	);
-	fclose(outf);
+	{
+		auto path = OUT_PATH / "Imp(t).dat";
+		auto path_str = path.string();
+		FILE* outf = (it == 0)
+			? fopen(path_str.c_str(), "w")
+			: fopen(path_str.c_str(), "a");
+		real Impls = sqrt(
+			Imp.x * Imp.x +
+			Imp.y * Imp.y +
+			Imp.z * Imp.z
+		);
+		real Impls0 = sqrt(
+			Imp0.x * Imp0.x +
+			Imp0.y * Imp0.y +
+			Imp0.z * Imp0.z
+		);
+		fprintf(outf, "%d %f %1.15f %g %g %g\n",
+			it_all,
+			t,
+			Impls,
+			Impls - Impls0,
+			Impls / Impls0 - 1.0,
+			fabs(Impls / Impls0 - 1.0)
+		);
+		fclose(outf);
+	}
 
-  	outf = (it == 0)
-		? fopen("E(t).dat", "w")
-		: fopen("E(t).dat", "a");
-	fprintf(outf, "%d %f %1.15f %g %g %g %g\n",
-		it_all,
-		t,
-		E,
-		E / E0 - 1.0,
-		fabs(E / E0 - 1.0),
-		0.5 * Ek,
-		0.5 * Ep
-	);
-	fclose(outf);
+	{
+		auto path = OUT_PATH / "Imp(t).dat";
+		auto path_str = path.string();
+		FILE* outf = (it == 0)
+			? fopen(path_str.c_str(), "w")
+			: fopen(path_str.c_str(), "a");
+		fprintf(outf, "%d %f %1.15f %g %g %g %g\n",
+			it_all,
+			t,
+			E,
+			E / E0 - 1.0,
+			fabs(E / E0 - 1.0),
+			0.5 * Ek,
+			0.5 * Ep
+		);
+		fclose(outf);
+	}
 
 	printf("print result end\n");
 }
@@ -1382,6 +1403,7 @@ __host__ auto read_galaxies(const char* filename) {
 	printf("NN = %d, Ns = %d, Ndm = %d\n", NN, Ns, Ndm);
 	printf("mp_s[0] = %g, mp_dm[0] = %g \n", mp_s[0], mp_dm[0]);
 
+	fclose(outf);
 	return std::make_tuple(
 		M_glx,
 		Ns,
@@ -1405,69 +1427,45 @@ __host__ auto read_galaxies(const char* filename) {
 	);
 }
 
-int main(int argc, char * argv[])
-{
-	FILE *outf;
-	real r, vr, vfi, fi;
-  	char str[24];
+void check_computing_units_info() {
+	// get threads count
+	int cpuThreads = omp_get_num_threads();
+	printf("cpuThreads = %d\n", cpuThreads);
 
-	//----GPU device------------------------------------------------
-	int deviceCount, nGPU;
-	cudaDeviceProp prop;
-	int j, nthr, i;
-
-	nthr = omp_get_num_threads();
-	printf("cpuThreads = %d\n", nthr);
-
+	// get device count
+	int deviceCount = 0;
 	cudaGetDeviceCount(&deviceCount);
 	printf("deviceCount = %d\n", deviceCount);
-	for (i = 0; i < deviceCount; i++){
+
+	if (deviceCount == 0) {
+		exit(-1);
+	}
+
+	// print devices properties
+	cudaDeviceProp prop;
+	for (int i = 0; i < deviceCount; i++){
 		cudaGetDeviceProperties(&prop, i);
 		printf("gpuID = %d, gpuName = %s\n", i, prop.name);
 	}
 
-  	char name[FILENAME_MAX];
-	outf = fopen("__GPUs.ini", "r");
-	fscanf(outf, "%d  %[^\n]", &nGPU, name);
+	cudaSetDevice(0);
+}
 
-    int *deviceId = new int[nGPU];
-	for (i = 0; i < nGPU; i++) {
-		fscanf(outf, "%d  %[^\n]", &deviceId[i], name);
-		if (deviceId[i] > deviceCount - 1) {
-			printf("\n Net takogo nomera device GPU");
-			return 0;
-		}
-	}
-	fclose(outf);
+int main(int argc, char * argv[]) {
+	std::cout << std::endl;
+	std::cout << std::endl;
+	std::cout << std::endl;
+	std::cout << std::endl;
+	check_computing_units_info();
 
-	for (i = 0; i < nGPU; i++)
-		printf("deviceId[%d] = %d\n", i, deviceId[i]);
+	char temp[512];
 
-	int can_access_peer, itmp;
-	for (i = 0; i < nGPU; i++) {
-		cudaSetDevice(deviceId[i]);
-		for (j = 0; j < nGPU; j++) {
-			if (j != i) {
-				cudaDeviceCanAccessPeer(&can_access_peer, deviceId[i], deviceId[j]);
-				printf("can_access_peer=%d, %d, %d\n", can_access_peer, deviceId[i], deviceId[j]);
-				if (can_access_peer == 0) {
-					printf("ERROR! -- can_access_peer = 0 for deviceId = %d  and  deviceId = %d\n", deviceId[i], deviceId[j]);
-					printf("Press any key + Enter\n");
-					scanf("%d", &itmp);
-					exit(0);
-				}
-			}
-		}
-	}
+	real r, vr, vfi, fi;
+  	char str[24];
 
-	for (i = 0; i < nGPU; i++) {
-		cudaSetDevice(deviceId[i]);
-		for (j = 0; j < nGPU; j++) {
-			if (j != i) {
-				cudaDeviceEnablePeerAccess(deviceId[j], 0);
-			}
-		}
-	}
+	//----GPU device------------------------------------------------
+	int j, i;
+
 
 	cudaEvent_t start, stop, start1, stop1;
 	float gpuTime = 0.0; //
@@ -1497,61 +1495,73 @@ int main(int argc, char * argv[])
 	double *X_glx, *Y_glx, *Z_glx; // galaxy mass center [galaxy num]
 	double *Vx_glx, *Vy_glx, *Vz_glx; // galaxy mass center [galaxy num]
 
-	std::tie(
-		M_glx,
-		Ns,
-		Ndm,
-		NN,
-		N_s,
-		N_dm,
-		Mass_s,
-		Mass_dm,
-		mp_s,
-		mp_dm,
-		X_glx,
-		Y_glx,
-		Z_glx,
-		Vx_glx,
-		Vy_glx,
-		Vz_glx,
-		alpha_glx,
-		eps_s,
-		eps_dm
-	) = read_galaxies("__start_galaxies.ini");
+	{
+		auto start_galaxies_path = INI_PATH / "__start_galaxies.ini";
+		auto start_galaxies_path_str = start_galaxies_path.string();
+		std::tie(
+			M_glx,
+			Ns,
+			Ndm,
+			NN,
+			N_s,
+			N_dm,
+			Mass_s,
+			Mass_dm,
+			mp_s,
+			mp_dm,
+			X_glx,
+			Y_glx,
+			Z_glx,
+			Vx_glx,
+			Vy_glx,
+			Vz_glx,
+			alpha_glx,
+			eps_s,
+			eps_dm
+		) = read_galaxies(start_galaxies_path_str.c_str());
+		printf("Ns / BLOCK_SIZE_b = %d\n", Ns / BLOCK_SIZE);
+		printf("Ndm / BLOCK_SIZE_b = %d\n", Ns / BLOCK_SIZE);
+		printf("NN / BLOCK_SIZE_b = %d\n", NN / BLOCK_SIZE);
+	}
 
-	std::tie(
-		i_cont,
-		tmax,
-		dtsave,
-		tsave
-	) = read_start_info("__start_nbody.ini");
+	{
+		auto start_nbody_path = INI_PATH / "__start_nbody.ini";
+		auto start_nbody_path_str = start_nbody_path.string();
+		std::tie(
+			i_cont,
+			tmax,
+			dtsave,
+			tsave
+		) = read_start_info(start_nbody_path_str.c_str());
+	}
 
-	printf("Ns / BLOCK_SIZE_b = %d\n", Ns / BLOCK_SIZE);
-	printf("Ndm / BLOCK_SIZE_b = %d\n", Ns / BLOCK_SIZE);
-	printf("NN / BLOCK_SIZE_b = %d\n", NN / BLOCK_SIZE);
-
-	outf = fopen("__gr_par.ini", "r");
-	fscanf(outf, "%lf  %[^\n]", &Mh, name);
-	fscanf(outf, "%lf  %[^\n]", &a, name);
-	fscanf(outf, "%lf  %[^\n]", &Rh, name);
-	fscanf(outf, "%lf  %[^\n]", &Mb, name);
-	fscanf(outf, "%lf  %[^\n]", &b, name);
-	fscanf(outf, "%lf  %[^\n]", &Rb, name);
-	fscanf(outf, "%lf  %[^\n]", &eps2, name);
-	fscanf(outf, "%lf  %[^\n]", &dtgrav, name);
-	fscanf(outf, "%lf  %[^\n]", &K_m, name);    // K_m = Md/(10^{10}*Msun)
-	fscanf(outf, "%lf  %[^\n]", &K_r, name);    // K_r = L_r / 10 кпк
-	fclose(outf);
-	printf("Mh\t= %f\n", Mh);
-	printf("a\t= %f\n", a);
-	printf("Rh\t= %f\n", Rh);
-	printf("Mb\t= %f\n", Mb);
-	printf("b\t= %f\n", b);
-	printf("Rb\t= %f\n", Rb);
-	printf("eps\t= %f\n", eps2);
-	eps2 *= eps2;
-	printf("eps2\t= %f\n", eps2);
-	printf("dtgrav\t= %f\n", dtgrav);
+	{
+		auto gr_par_path = INI_PATH / "__gr_par.ini";
+		auto gr_par_path_str = gr_par_path.string();
+		FILE* outf = fopen(gr_par_path_str.c_str(), "r");
+		memset(temp, 0, sizeof(temp));
+		fscanf(outf, "%lf  %[^\n]", &Mh, temp);
+		fscanf(outf, "%lf  %[^\n]", &a, temp);
+		fscanf(outf, "%lf  %[^\n]", &Rh, temp);
+		fscanf(outf, "%lf  %[^\n]", &Mb, temp);
+		fscanf(outf, "%lf  %[^\n]", &b, temp);
+		fscanf(outf, "%lf  %[^\n]", &Rb, temp);
+		fscanf(outf, "%lf  %[^\n]", &eps2, temp);
+		fscanf(outf, "%lf  %[^\n]", &dtgrav, temp);
+		fscanf(outf, "%lf  %[^\n]", &K_m, temp);    // K_m = Md/(10^{10}*Msun)
+		fscanf(outf, "%lf  %[^\n]", &K_r, temp);    // K_r = L_r / 10 кпк
+		fclose(outf);
+		printf("Mh\t= %lf\n", Mh);
+		printf("a\t= %lf\n", a);
+		printf("Rh\t= %lf\n", Rh);
+		printf("Mb\t= %lf\n", Mb);
+		printf("b\t= %lf\n", b);
+		printf("Rb\t= %lf\n", Rb);
+		printf("eps\t= %lf\n", eps2);
+		eps2 *= eps2;
+		printf("eps2\t= %lf\n", eps2);
+		printf("dtgrav\t= %lf\n", dtgrav);
+	}
 
 	const int is_grav = (int)(dtsave / dtgrav + 0.5); // in-frame iterations max (between saves)
 	int it_grav = 0; // in-frame iterations (between saves)
@@ -1672,33 +1682,39 @@ int main(int argc, char * argv[])
 	printf("***Input Data***\n");
 
   	if (i_cont > 0) {
+
 		//---Stars---
-		sprintf(str, "bin/S_%5d.bin", i_cont);
-      	FILE* outf = fopen(str, "rb");
-      	fread(&Ns, sizeof(int), 1, outf);
-		fread(&t, sizeof(double), 1, outf);
-		int n0 = 0;
-		for(k = 0; k < M_glx; k++) {
-        	for (i = n0; i < n0 + N_s[k]; i++) {
-				fread(&pos_host[i].x, sizeof(double), 1, outf);
-				fread(&pos_host[i].y, sizeof(double), 1, outf);
-				fread(&pos_host[i].z, sizeof(double), 1, outf);
-				fread(&vel_host[i].x, sizeof(double), 1, outf);
-				fread(&vel_host[i].y, sizeof(double), 1, outf);
-				fread(&vel_host[i].z, sizeof(double), 1, outf);
-				mass_host[i].x = mp_s[k];
-				eps2_host[i] = eps_s[k]*eps_s[k];
+		{
+			auto path = BIN_PATH / std::format("S_%5d.bin", i_cont);
+			auto path_str = path.string();
+			FILE* outf = fopen(path_str.c_str(), "rb");
+			fread(&Ns, sizeof(int), 1, outf);
+			fread(&t, sizeof(double), 1, outf);
+			int n0 = 0;
+			for(k = 0; k < M_glx; k++) {
+				for (i = n0; i < n0 + N_s[k]; i++) {
+					fread(&pos_host[i].x, sizeof(double), 1, outf);
+					fread(&pos_host[i].y, sizeof(double), 1, outf);
+					fread(&pos_host[i].z, sizeof(double), 1, outf);
+					fread(&vel_host[i].x, sizeof(double), 1, outf);
+					fread(&vel_host[i].y, sizeof(double), 1, outf);
+					fread(&vel_host[i].z, sizeof(double), 1, outf);
+					mass_host[i].x = mp_s[k];
+					eps2_host[i] = eps_s[k]*eps_s[k];
+				}
+				n0 += N_s[k];
 			}
-			n0 += N_s[k];
+			fclose(outf);
 		}
-		fclose(outf);
+
       	//---DM---
-		if(Ndm>0) {
-			i = sprintf(str, "bin/DM_%5d.bin", i_cont);
-			outf = fopen(str, "rb");
+		if(Ndm > 0) {
+			auto path = BIN_PATH / std::format("DM_%5d.bin", i_cont);
+			auto path_str = path.string();
+			FILE* outf = fopen(path_str.c_str(), "rb");
         	fread(&Ndm, sizeof(int), 1, outf);
           	fread(&t, sizeof(double), 1, outf);
-			n0=0;
+			int n0=0;
 			for(k=0; k<M_glx; k++) {
            		for (i = n0+Ns; i < n0+Ns+N_dm[k]; i++) {
 					fread(&pos_host[i].x, sizeof(double), 1, outf);
@@ -1718,11 +1734,15 @@ int main(int argc, char * argv[])
 		printf("Start time = %f  it = %d\n", t, it);
 		printf("***Start result t***\n");
 
-		outf = fopen("LIE_0.bin", "rb");
-		fread(&L0, sizeof(real3), 1, outf);
-		fread(&Imp0, sizeof(real3), 1, outf);
-		fread(&E0, sizeof(real), 1, outf);
-		fclose(outf);
+		{
+			auto path = BIN_PATH / std::format("LIE_0.bin", i_cont);
+			auto path_str = path.string();
+			FILE* outf = fopen(path_str.c_str(), "rb");
+			fread(&L0, sizeof(real3), 1, outf);
+			fread(&Imp0, sizeof(real3), 1, outf);
+			fread(&E0, sizeof(real), 1, outf);
+			fclose(outf);
+		}
 
 		it++;
 		itg = (int)(t / dtgrav) + 1;
@@ -1735,9 +1755,9 @@ int main(int argc, char * argv[])
 		int n0 = 0;
       	for(k = 0; k < M_glx; k++) {
       		if(N_s[k] > 0) {
-				FILE* outf = NULL;
-        		sprintf(str, "start_S%1d.txt", k);
-				outf = fopen(str, "r");
+				auto path = INI_PATH / std::format("start_S{}.txt", k);
+				auto path_str = path.string();
+				FILE* outf = fopen(path_str.c_str(), "r");
           		if (NULL == outf) {
 					printf("Error OF -- %s ",str);
 					return 0;
@@ -1785,8 +1805,9 @@ int main(int argc, char * argv[])
 		for (k = 0; k < M_glx; k++) {
 			if (N_dm[k] > 0) {
 				FILE* outf = NULL;
-				sprintf(str, "start_DM%1d.txt", k);
-				outf = fopen(str, "r");
+				auto path = INI_PATH / std::format("start_DM{}.txt", k);
+				auto path_str = path.string();
+				outf = fopen(path_str.c_str(), "r");
           		if (NULL == outf) {
 					printf("Error OF -- %s ",str);
 					return 0;
@@ -1851,8 +1872,6 @@ int main(int argc, char * argv[])
 	CuDarray<real3> acc_(_num_particles);
 	CuDarray<real3> acct_(_num_particles);
 
-	int Nk = NN / nGPU;
-
 	CuDarray<CellInfo> cell_info_(_num_cells);
 	CuDarray<int> cell_particles_count_(_num_cells);
 	CuDarray<real> cell_mass_(_num_cells);
@@ -1870,7 +1889,7 @@ int main(int argc, char * argv[])
 
 	//------Расчет грав. сил-----------------------------------------------------
 	printf("calc grav forces\n");
-	CuCall(PSI_kernel, Nk / BLOCK_SIZE, BLOCK_SIZE) (
+	CuCall(PSI_kernel, NN / BLOCK_SIZE, BLOCK_SIZE) (
 		psi_,
 		pos_,
 		pos_,
@@ -1929,13 +1948,6 @@ int main(int argc, char * argv[])
 	if(it == 1) {
 		printf("***Start result t=0***\n");
 		result(pos_host, vel_host, mass_host, 0, 0.0, psi_host, 0);
-	}
-
-	for (i = 0; i < nGPU; i++){
-		cudaSetDevice(deviceId[i]);
-		for (j = 0; j < nGPU; j++){
-			if (j != i) cudaDeviceDisablePeerAccess(deviceId[j]);
-		}
 	}
 
 	return 0;
