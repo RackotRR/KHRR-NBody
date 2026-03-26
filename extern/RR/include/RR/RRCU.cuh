@@ -118,9 +118,17 @@ namespace RR::CUDA {
             CuDarrayBase::remove_alloc(get_allocated());
         }
         CuDarray(const CuDarray&) = delete;
-        CuDarray(CuDarray&&) noexcept = delete;
+        CuDarray(CuDarray&& other) noexcept
+            : ptr{ std::exchange(other.ptr, nullptr) }
+            , N{ std::exchange(other.N, 0) }
+        {
+        }
         auto& operator=(const CuDarray&) = delete;
-        auto& operator=(CuDarray&&) noexcept = delete;
+        auto& operator=(CuDarray&& other) noexcept {
+            this->ptr = std::exchange(other.ptr, nullptr);
+            this->N = std::exchange(other.N, 0);
+            return *this;
+        }
 
         void set_zero() {
             auto result = cudaMemset(ptr, 0, get_allocated());
@@ -190,6 +198,7 @@ namespace RR::CUDA {
         }
 
     private:
+        CuDarray() = default;
         static T* alloc(size_t N) {
             T* ptr = nullptr;
 
@@ -220,5 +229,60 @@ namespace RR::CUDA {
     inline void swap(CuDarray<T>& left, CuDarray<T>& right) noexcept {
         left.swap(right);
     }
+
+    class CuEvent {
+    public:
+        CuEvent() {
+            cudaEventCreate(&event);
+        }
+        ~CuEvent() {
+            cudaEventDestroy(event);
+        }
+
+        operator cudaEvent_t() const {
+            return event;
+        }
+
+        CuEvent(const CuEvent&) = delete;
+        CuEvent(CuEvent&&) = delete;
+        auto& operator=(const CuEvent&) = delete;
+        auto& operator=(CuEvent&&) = delete;
+    private:
+        cudaEvent_t event;
+    };
+
+    class CuTimer {
+    public:
+        void start() {
+            cudaEventRecord(start_);
+        }
+        void stop() {
+            cudaEventRecord(stop_);
+            cudaEventSynchronize(stop_);
+        }
+
+        float elapsedMilliseconds() const {
+            float ms = 0;
+            auto result = cudaEventElapsedTime(&ms, start_, stop_);
+
+            if (result != cudaSuccess) {
+                throw std::runtime_error{
+                    std::format(
+                        "cudaEventElapsedTime error: {} ({})",
+                        cudaGetErrorName(result),
+                        cudaGetErrorString(result)
+                    )
+                };
+            }
+
+            return ms;
+        }
+
+        float elapsedSeconds() const {
+            return elapsedMilliseconds() * 0.001;
+        }
+    private:
+        CuEvent start_, stop_;
+    };
 
 }

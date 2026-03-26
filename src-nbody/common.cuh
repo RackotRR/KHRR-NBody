@@ -47,8 +47,8 @@ struct DataBlock{
 	real    Rh2;
 	real    con;
 	real    const1;
-	real    c_psi_h;
-	real    c_psi_b;
+	real    c_phi_h;
+	real    c_phi_b;
 	real    eps2;
 };
 
@@ -73,3 +73,39 @@ __constant__ DataBlock dd;
 __constant__ WaveEqData wave_eq_data_;
 
 #define at(x, y, z) ((x) + (y) * (NX) + (z) * (NX) * (NX))
+
+__host__ __device__ real dot2(const real2& vec1, const real2& vec2) {
+	return
+		vec1.x * vec2.x +
+		vec1.y * vec2.y;
+}
+__host__ __device__ real dot3(const real3& vec1, const real3& vec2) {
+	return
+		vec1.x * vec2.x +
+		vec1.y * vec2.y +
+		vec1.z * vec2.z;
+}
+__host__ __device__ real dot4(const real4& vec1, const real4& vec2) {
+	return
+		vec1.x * vec2.x +
+		vec1.y * vec2.y +
+		vec1.z * vec2.z +
+		vec1.w * vec2.w;
+}
+
+__host__ __device__ real norm2(const real2& vec) {
+	return sqrt(dot2(vec, vec));
+}
+__host__ __device__ real norm3(const real3& vec) {
+	return sqrt(dot3(vec, vec));
+}
+__host__ __device__ real norm4(const real4& vec) {
+	return sqrt(dot4(vec, vec));
+}
+
+template<typename T>
+__host__ __device__ T clamp(T val, T min_val, T max_val) {
+    if (val < min_val) return min_val;
+    if (val > max_val) return max_val;
+    return val;
+}

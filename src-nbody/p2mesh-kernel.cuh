@@ -4,46 +4,13 @@
 // алгоритм основан на статье
 // Khrapov, Khoperskov 2017 - Smoothed-Particle Hydrodynamics Models: Implementation Features on GPUs
 
-template<typename T>
-__host__ __device__ T clamp(T val, T min_val, T max_val) {
-    if (val < min_val) return min_val;
-    if (val > max_val) return max_val;
-    return val;
-}
-
-// ====================================================
-// ЯДРО 1: ИНИЦИАЛИЗАЦИЯ ВСПОМОГАТЕЛЬНЫХ МАССИВОВ
-// ====================================================
-__global__ void initSortingArrays(
-    CellInfo* cellInfo,     // [TOTAL_CELLS] информация о ячейках
-    int* cellParticleCount, // [TOTAL_CELLS] счётчик для atomicAdd
-    int* maxPBC,            // [TOTAL_CELLS/BLOCK_SIZE] частиц в блоке
-    const int numCells,
-	const int numBlocks
-)
-{
-	int i_cell = threadIdx.x + blockIdx.x * blockDim.x;
-    if (i_cell >= numCells) return;
-
-    // Инициализация нулями
-    cellInfo[i_cell].count = 0;
-    cellInfo[i_cell].start_id = 0;
-    cellParticleCount[i_cell] = 0;
-
-    // Инициализация maxPBC для каждого блока (делает только первый поток)
-    if (i_cell % BLOCK_SIZE == 0) {
-        if (blockIdx.x < numBlocks) {
-            maxPBC[blockIdx.x] = 0;
-        }
-    }
-}
 
 // ====================================================
 // ЯДРО 2: ИНИЦИАЛИЗАЦИЯ ВСПОМОГАТЕЛЬНЫХ МАССИВОВ
 // ====================================================
 __global__ void assignParticlesToCells(
 	const real4* particles_pos, // [N] исходные частицы
-    ParticleCellInfo* particleCellInfo, // [N] инфо: x=ячейка, y=индекс в ячейке
+    ParticleCellInfo* particles_cell_info, // [N] инфо: x=ячейка, y=индекс в ячейке
     CellInfo* cellInfo,          // [TOTAL_CELLS] для подсчёта частиц
     int* cellParticleCount, // [TOTAL_CELLS] счётчик для atomicAdd
     const int numParticles
@@ -76,13 +43,13 @@ __global__ void assignParticlesToCells(
     int i_cell = iz * sx * sy + iy * sz + ix;
 
     // Сохраняем номер ячейки для частицы
-    particleCellInfo[i_part].cell_id = i_cell;
+    particles_cell_info[i_part].cell_id = i_cell;
 
     // Атомарно увеличиваем счётчик частиц в ячейке
     int pos = atomicAdd(&cellParticleCount[i_cell], 1);
 
     // Сохраняем позицию внутри ячейки
-    particleCellInfo[i_part].id_in_cell = pos;
+    particles_cell_info[i_part].id_in_cell = pos;
 
     // Атомарно обновляем количество частиц в ячейке
 	atomicAdd(&cellInfo[i_cell].count, 1);
@@ -158,14 +125,14 @@ __global__ void adjustGlobalPrefixSums(
 // ====================================================
 __global__ void computeCellMassesUnsorted(
     const real2* particle_mass,   	   // [N] упорядоченные частицы
-    ParticleCellInfo* particleCellInfo,// [N] инфо: x=ячейка, y=индекс в ячейке
+    ParticleCellInfo* particles_cell_info,// [N] инфо: x=ячейка, y=индекс в ячейке
     double* cellMasses,                // [TOTAL_CELLS] результат
     const int numParticles)
 {
     int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
     if (i_particle >= numParticles) return;
 
-    int i_cell = particleCellInfo[i_particle].cell_id;
+    int i_cell = particles_cell_info[i_particle].cell_id;
 	atomicAdd(&cellMasses[i_cell], particle_mass[i_particle].x);
 }
 
@@ -182,20 +149,9 @@ __global__ void countParticles(
 	cell_phi[i_cell] = cellInfo[i_cell].count;
 }
 // ====================================================
-__global__ void zeroCellPhi(
-    double* cell_phi,                // [TOTAL_CELLS] результат
-	const int numCells,
-	double value
-)
-{
-	int i_cell = threadIdx.x + blockIdx.x * blockDim.x;
-	if (i_cell > numCells) return;
-
-	cell_phi[i_cell] = value;
-}
 __global__ void computeCellPhiUnsorted(
     const real* particle_phi,   	   // [N] упорядоченные частицы
-    const ParticleCellInfo* particleCellInfo,// [N] инфо: x=ячейка, y=индекс в ячейке
+    const ParticleCellInfo* particles_cell_info,// [N] инфо: x=ячейка, y=индекс в ячейке
     const CellInfo* cellInfo,     		 // [TOTAL_CELLS]
     double* cell_phi,                // [TOTAL_CELLS] результат
     const int numParticles)
@@ -203,17 +159,18 @@ __global__ void computeCellPhiUnsorted(
     int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
     if (i_particle >= numParticles) return;
 
-    int i_cell = particleCellInfo[i_particle].cell_id;
+    int i_cell = particles_cell_info[i_particle].cell_id;
 	atomicAdd(&cell_phi[i_cell], particle_phi[i_particle] / cellInfo[i_cell].count);
-	// if (particleCellInfo[i_particle].id_in_cell == 0) {
+	// if (particles_cell_info[i_particle].id_in_cell == 0) {
 	// 	cell_phi[i_cell] = particle_phi[i_particle];
 	// }
 }
 
-__global__ void acceleration_field(
-	real3* acceleration,
-	const real* phi,
-	const real* mass,
+__global__ void uforce_field(
+	real3* cell_uforce, // сила на единицу массы
+	real*  cell_uforce_abs,  // сила на единицу массы
+	const real* cell_phi,
+	const real* cell_mass,
 	const int NX,
 	const double DX
 )
@@ -227,90 +184,118 @@ __global__ void acceleration_field(
 	real3 dphi;
 
 	if (ix == 0) {
-		dphi.x = phi[at(ix + 1, iy, iz)] - phi[xyz];
+		dphi.x = cell_phi[at(ix + 1, iy, iz)] - cell_phi[xyz];
 	}
 	else if (ix == NX - 1) {
-		dphi.x = phi[xyz] - phi[at(ix - 1, iy, iz)];
+		dphi.x = cell_phi[xyz] - cell_phi[at(ix - 1, iy, iz)];
 	}
 	else {
-		dphi.x = 0.5 * (phi[at(ix + 1, iy, iz)] - phi[at(ix - 1, iy, iz)]);
+		dphi.x = 0.5 * (cell_phi[at(ix + 1, iy, iz)] - cell_phi[at(ix - 1, iy, iz)]);
 	}
 
 	if (iy == 0) {
-		dphi.y = phi[at(ix, iy + 1, iz)] - phi[xyz];
+		dphi.y = cell_phi[at(ix, iy + 1, iz)] - cell_phi[xyz];
 	}
 	else if (iy == NX - 1) {
-		dphi.y = phi[xyz] - phi[at(ix, iy - 1, iz)];
+		dphi.y = cell_phi[xyz] - cell_phi[at(ix, iy - 1, iz)];
 	}
 	else {
-		dphi.y = 0.5 * (phi[at(ix, iy + 1, iz)] - phi[at(ix, iy - 1, iz)]);
+		dphi.y = 0.5 * (cell_phi[at(ix, iy + 1, iz)] - cell_phi[at(ix, iy - 1, iz)]);
 	}
 
 	if (iz == 0) {
-		dphi.z = phi[at(ix, iy, iz + 1)] - phi[xyz];
+		dphi.z = cell_phi[at(ix, iy, iz + 1)] - cell_phi[xyz];
 	}
 	else if (iz == NX - 1) {
-		dphi.z = phi[xyz] - phi[at(ix, iy, iz - 1)];
+		dphi.z = cell_phi[xyz] - cell_phi[at(ix, iy, iz - 1)];
 	}
 	else {
-		dphi.z = 0.5 * (phi[at(ix, iy, iz + 1)] - phi[at(ix, iy, iz - 1)]);
+		dphi.z = 0.5 * (cell_phi[at(ix, iy, iz + 1)] - cell_phi[at(ix, iy, iz - 1)]);
 	}
 
-	dphi.x /= DX;
-	dphi.y /= DX;
-	dphi.z /= DX;
-	acceleration[xyz] = dphi;
+    real coef = -1. / DX;
+	dphi.x *= coef;
+	dphi.y *= coef;
+	dphi.z *= coef;
+
+	cell_uforce[xyz] = dphi;
+
+    if (cell_uforce_abs) {
+        cell_uforce_abs[xyz] = norm3(dphi);
+    }
 }
 
 __global__ void apply_acceleration_to_particles(
 	real3* particle_acceleration,
-	const real3* cell_acceleration,
-    ParticleCellInfo* particleCellInfo,
+	const real3* cell_uforce,
+    const real2* particles_mass,
+    ParticleCellInfo* particles_cell_info,
     const int numParticles
 )
 {
     int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
     if (i_particle >= numParticles) return;
 
-    int i_cell = particleCellInfo[i_particle].cell_id;
-	particle_acceleration[i_particle] = cell_acceleration[i_cell];
+    int i_cell = particles_cell_info[i_particle].cell_id;
+	particle_acceleration[i_particle].x = cell_uforce[i_cell].x;// * particles_mass[i_particle].x;
+	particle_acceleration[i_particle].y = cell_uforce[i_cell].y;// * particles_mass[i_particle].x;
+	particle_acceleration[i_particle].z = cell_uforce[i_cell].z;// * particles_mass[i_particle].x;
 }
-__global__ void apply_psi_to_particles(
-	real* particle_psi,
-	const real* cell_psi,
-    CellInfo* cellInfo,     // [TOTAL_CELLS]
-    ParticleCellInfo* particleCellInfo,
+__global__ void apply_cell_to_particles(
+	real* particle_value,
+	const real* cell_value,
+    ParticleCellInfo* particles_cell_info,
     const int numParticles
 )
 {
     int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
     if (i_particle >= numParticles) return;
 
-    int i_cell = particleCellInfo[i_particle].cell_id;
-	// particle_psi[i_particle] = cell_psi[i_cell];
-	particle_psi[i_particle] = cellInfo[i_cell].count;
+    int i_cell = particles_cell_info[i_particle].cell_id;
+	particle_value[i_particle] = cell_value[i_cell];
 }
 
-__global__ void init_phi(
-	real* mass,
-	real* phi0,
-	real* phi1,
-	real* phi2,
-	const int NX
+__global__ void apply_cell_to_particles_avg(
+	real* particle_value,
+	const real* cell_value,
+    ParticleCellInfo* particles_cell_info,
+    const CellInfo* cellInfo,
+    const int numParticles
 )
 {
-    int ix = threadIdx.x + blockIdx.x * blockDim.x;
-    int iy = threadIdx.y + blockIdx.y * blockDim.y;
-    int iz = threadIdx.z + blockIdx.z * blockDim.z;
+    int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_particle >= numParticles) return;
 
-    int is_valid_idx =
-           ix < NX
-        && iy < NX
-        && iz < NX;
-    if (!is_valid_idx) return;
+    int i_cell = particles_cell_info[i_particle].cell_id;
+	particle_value[i_particle] = cellInfo[i_cell].count > 0
+        ? cell_value[i_cell] / cellInfo[i_cell].count
+        : -1.;
+}
 
-	mass[at(ix, iy, iz)] = 0;
-	phi0[at(ix, iy, iz)] = 0;
-	phi1[at(ix, iy, iz)] = 0;
-	phi2[at(ix, iy, iz)] = 0;
+__global__ void apply_particle_to_cell_weighted(
+    double* cell_value,
+    const real* cell_mass,
+    const real2* particle_mass,
+    const real* particle_value,
+    const ParticleCellInfo* particles_cell_info,
+    const int numParticles)
+{
+    int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_particle >= numParticles) return;
+
+    int i_cell = particles_cell_info[i_particle].cell_id;
+    real weight = particle_mass[i_particle].x / cell_mass[i_cell];
+	atomicAdd(&cell_value[i_cell], particle_value[i_particle] * weight);
+}
+
+__global__ void acc_abs(
+    real* acc_abs,
+    const real3* acc,
+    const int N
+)
+{
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i >= N) return;
+
+    acc_abs[i] = norm3(acc[i]);
 }

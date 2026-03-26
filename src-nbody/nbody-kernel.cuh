@@ -105,7 +105,13 @@ __global__ void ACCEL(
 }
 
 //-----Psi_Nbody kernel--------
-__global__ void PSI_kernel(real *PSI, real4 *Pos_i, real4 *Pos_j, real2 *Mhp_j, real *eps2_pj)
+__global__ void PSI_kernel(
+	real *PSI,
+	real4 *Pos_i,
+	real4 *Pos_j,
+	real2 *Mhp_j,
+	real *eps2_pj
+)
 {
 	__shared__ real4 sp[BLOCK_SIZE];
 	__shared__ real eps2[BLOCK_SIZE];

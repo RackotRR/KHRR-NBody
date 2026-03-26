@@ -31,77 +31,14 @@ real3 Imp0, L0;
 DataBlock d;
 WaveEqData wave_eq_data;
 
-
-// ====================================================
-
-// double* calc_phi(
-//     double* phi_new,
-//     double* phi,
-//     double* phi_old,
-//     const double* mass,
-// 	const int NX,
-// 	const int NX_LOCAL,
-// 	const double DX,
-// 	const double DISS_BASE,
-// 	const double DISS_EXTRA,
-// 	const double SIM_L,
-// 	const double BC_L,
-// 	const double C,
-// 	const double DT,
-// 	const int iterations
-// )
-// {
-// 	cudaDeviceSynchronize();
-// 	unsigned threads_count = static_cast<unsigned>(NX_LOCAL);// 8;
-// 	unsigned blocks_count = static_cast<unsigned>(NX + threads_count - 1) / threads_count;
-// 	dim3 threads_per_block{
-// 		threads_count,
-// 		threads_count,
-// 		threads_count
-// 	};
-// 	dim3 blocks_per_grid{
-// 		blocks_count,
-// 		blocks_count,
-// 		blocks_count
-// 	};
-// 	for (int iter = 0; iter < iterations; ++iter) {
-// 		printf("wave_diss_iteration iter: %d\n", iter);
-// 		wave_diss_iteration<<<blocks_per_grid, threads_per_block>>>(
-// 			phi_new,
-// 			phi,
-// 			phi_old,
-// 			mass,
-// 			NX,
-// 			DX,
-// 			DISS_BASE,
-// 			DISS_EXTRA,
-// 			SIM_L,
-// 			BC_L,
-// 			C,
-// 			DT
-// 		);
-
-// 		auto err = cudaDeviceSynchronize();
-// 		if (err != cudaSuccess) {
-// 			printf("wave_diss_iteration err: %d (%s)\n", (int)err, cudaGetErrorName(err));
-// 		}
-
-// 		phi_old = phi;
-// 		phi = phi_new;
-// 		phi_new = phi_old;
-// 	}
-
-// 	return phi;
-// }
-
 void check_energy(
 	const std::vector<double>& cell_mass,
 	const std::vector<double>& cell_phi,
-	int _num_cells
+	int num_cells
 )
 {
 	double ep = 0;
-	for (size_t i = 0; i < _num_cells; ++i) {
+	for (size_t i = 0; i < num_cells; ++i) {
 		ep += 0.5 * cell_mass[i] * cell_phi[i];
 	}
 	printf("ep: %g\n", ep);
@@ -110,17 +47,17 @@ void check_energy(
 void check_cell_particle_info_match(
 	const std::vector<CellInfo>& cell_info,
 	const std::vector<ParticleCellInfo>& particle_info,
-	int _num_particles,
-	int _num_cells
+	int num_particles,
+	int num_cells
 ) {
 	// check cell info & particle cell info
-	std::vector<CellInfo> cell_info_manual(_num_cells, CellInfo{ 0, 0 });
-	for (size_t i = 0; i < _num_particles; ++i) {
+	std::vector<CellInfo> cell_info_manual(num_cells, CellInfo{ 0, 0 });
+	for (size_t i = 0; i < num_particles; ++i) {
 		size_t c = particle_info[i].cell_id;
 		cell_info_manual[c].count++;
 	}
 
-	for (size_t i = 0; i < _num_cells; ++i) {
+	for (size_t i = 0; i < num_cells; ++i) {
 		if (cell_info_manual[i].count != cell_info[i].count) {
 			std::cout << "cell info mismatch!!! " << cell_info_manual[i].count << " : " << cell_info[i].count << std::endl;
 		}
@@ -158,18 +95,18 @@ auto check_particles_distribution(
 auto check_mass(
 	const std::vector<double>& cell_mass,
 	const std::vector<double2>& particles_mass,
-	double _dx,
-	double _domain_l,
+	double dx,
+	double domain_l,
 	int NX
 )
 {
 	int IY = NX / 2;
 	int IZ = NX / 2;
 
-	std::ofstream stream{ DEBUG_PATH / "mass_part.txt" };
+	std::ofstream stream{ DEBUG_PATH / "mass_cell.txt" };
 	stream << "x, mass" << std::endl;
 	for (size_t i = 0; i < NX; ++i) {
-		double x = -_domain_l + i * _dx;
+		double x = -domain_l + i * dx;
 		stream << std::format("{}, {:.6f}", x, cell_mass[at(i, IY, IZ)]) << std::endl;
 	}
 
@@ -191,72 +128,234 @@ auto check_mass(
 		<< std::endl;
 }
 
+struct ConvertParticlesParams {
+	int num_particles;
+	int num_cells;
+	int num_blocks;
+	int over_particles;
+	int over_cells;
+	int over_blocks;
+	int nx;
+};
+
+auto convert_particles_to_grid(
+	const ConvertParticlesParams& params,
+	const CuDarray<real4>& particles_pos_,
+	const CuDarray<real2>& particles_mass_,
+	CuDarray<ParticleCellInfo>& particles_cell_info_,
+	CuDarray<CellInfo>& cell_info_,
+	CuDarray<int>& cell_particles_count_,
+	CuDarray<int>& particles_in_block_,
+	CuDarray<real>& cell_mass_
+)
+{
+	CuDeviceSync();
+
+	particles_cell_info_.set_zero();
+	cell_info_.set_zero();
+	cell_particles_count_.set_zero();
+	particles_in_block_.set_zero();
+	cell_mass_.set_zero();
+
+    CuCall(assignParticlesToCells, params.over_particles, params.over_blocks) (
+        particles_pos_,
+        particles_cell_info_,
+        cell_info_,
+        cell_particles_count_,
+        params.num_particles
+    );
+    CuCall(computePrefixSums, params.over_cells, params.over_blocks) (
+        cell_info_,
+        particles_in_block_,
+        params.num_cells
+    );
+    CuCall(adjustGlobalPrefixSums, params.over_cells, params.over_blocks) (
+        cell_info_,
+        particles_in_block_,
+        params.num_cells
+    );
+	CuCall(computeCellMassesUnsorted, params.over_particles, params.over_blocks) (
+		particles_mass_,
+		particles_cell_info_,
+		cell_mass_,
+		params.num_particles
+	);
+}
+
+auto calc_acceleration_by_grid(
+	const ConvertParticlesParams& params,
+	const CuDarray<real4>& particles_pos_,
+	const CuDarray<real2>& particles_mass_,
+	CuDarray<real3> particles_acc_,
+	CuDarray<real> particles_phi_,
+	CuDarray<real> cell_phi_prev_,
+	CuDarray<real> cell_phi_curr_,
+	int iterations
+)
+{
+	static CuDarray<ParticleCellInfo> particles_cell_info_(params.num_particles);
+	static CuDarray<CellInfo> cell_info_(params.num_cells);
+	static CuDarray<int> cell_particles_count_(params.num_cells);
+	static CuDarray<int> particles_in_block_(params.num_blocks);
+	static CuDarray<real> cell_mass_(params.num_cells);
+	static CuDarray<real3> cell_uforce_(params.num_cells);
+	static CuDarray<real> cell_phi_next_(params.num_cells);
+
+	static std::once_flag once_flag;
+	std::call_once(once_flag, []{
+		std::cout << "GPU memory allocated total: " << CuDarrayBase::get_total_allocated_mb() << " mb" << std::endl;
+	});
+
+	CuTimer timer;
+	timer.start();
+	convert_particles_to_grid(
+		params,
+		particles_pos_,
+		particles_mass_,
+		particles_cell_info_,
+		cell_info_,
+		cell_particles_count_,
+		particles_in_block_,
+		cell_mass_
+	);
+	timer.stop();
+	float time_convert_particles_to_grid = timer.elapsedMilliseconds();
+
+	unsigned threads_count = 8;
+	unsigned blocks_count = static_cast<unsigned>(params.nx + threads_count - 1) / threads_count;
+	dim3 threads_per_block{ threads_count, threads_count, threads_count };
+	dim3 blocks_per_grid{ blocks_count, blocks_count, blocks_count };
+	timer.start();
+	for (int iter = 0; iter < iterations; ++iter) {
+		if (iter && iter % 500 == 0) {
+			std::cout << "wave_diss_iteration iter: " << iter << std::endl;
+		}
+		CuCall(wave_diss_iteration, blocks_per_grid, threads_per_block) (
+			cell_phi_next_,
+			cell_phi_curr_,
+			cell_phi_prev_,
+			cell_mass_
+		);
+		swap(cell_phi_prev_, cell_phi_curr_);
+		swap(cell_phi_curr_, cell_phi_next_);
+	}
+	timer.stop();
+	float time_wave_diss = timer.elapsedMilliseconds();
+
+	timer.start();
+	CuCall(uforce_field, params.over_cells, params.over_blocks) (
+		cell_uforce_,
+		nullptr,
+		cell_phi_curr_,
+		cell_mass_,
+		wave_eq_data.nx_wave,
+		wave_eq_data.dx_wave
+	);
+	CuCall(apply_acceleration_to_particles, params.over_particles, params.over_blocks) (
+		particles_acc_,
+		cell_uforce_,
+		particles_mass_,
+		particles_cell_info_,
+		params.num_particles
+	);
+	CuCall(apply_cell_to_particles, params.over_particles, params.over_blocks) (
+		particles_phi_,
+		cell_phi_curr_,
+		particles_cell_info_,
+		params.num_particles
+	);
+	timer.stop();
+	float time_acc = timer.elapsedMilliseconds();
+
+	std::cout << "timer convert_particles_to_grid : "
+		<< time_convert_particles_to_grid
+		<< " ms"
+		<< std::endl;
+	std::cout << "timer wave_diss_iteration : "
+		<< time_wave_diss
+		<< " ms"
+		<< std::endl;
+	std::cout << "timer forces : "
+		<< time_acc
+		<< " ms"
+		<< std::endl;
+
+	return std::make_tuple(
+		std::move(particles_acc_),
+		std::move(particles_phi_),
+		std::move(cell_phi_prev_),
+		std::move(cell_phi_curr_)
+	);
+}
+
 auto convert_particles(
-	CuDarray<real>& particles_phi,
-	const CuDarray<real4>& particles_pos,
-	const CuDarray<real2>& particles_mass,
-	CuDarray<CellInfo>& cell_info,
-	CuDarray<int>& cell_particles_count,
-	CuDarray<int>& particles_in_block,
-	CuDarray<ParticleCellInfo>& particles_cell_info,
-	CuDarray<real>& cell_mass,
-	CuDarray<real>& cell_phi_prev,
-	CuDarray<real>& cell_phi_curr,
-	CuDarray<real>& cell_phi_next,
-	CuDarray<real3>& cell_acceleration,
-	int _over_cells,
-	int _over_blocks,
-	int _over_particles,
-	int _num_cells,
-	int _num_cell_blocks,
-	int _num_particles,
-	real _domain_l,
-	int _nx,
-	real _dx,
+	const CuDarray<real>& particles_phi_,
+	const CuDarray<real3>& particles_acc_,
+	const CuDarray<real4>& particles_pos_,
+	const CuDarray<real2>& particles_mass_,
+	int over_cells,
+	int over_blocks,
+	int over_particles,
+	int num_cells,
+	int num_cell_blocks,
+	int num_particles,
+	real domain_l,
+	int NX,
+	real dx,
 	int iterations,
 	bool need_init_phi
 )
 {
 	cudaDeviceSynchronize();
 
+	static CuDarray<ParticleCellInfo> particles_cell_info_(num_particles);
+	static CuDarray<CellInfo> cell_info_(num_cells);
+	static CuDarray<int> cell_particles_count_(num_cells);
+	static CuDarray<int> particles_in_block_(num_cell_blocks);
+	static CuDarray<real> cell_mass_(num_cells);
+	static CuDarray<real3> cell_uforce_(num_cells);
+	static CuDarray<real> cell_phi_next_(num_cells);
+	static CuDarray<real> cell_phi_curr_(num_cells);
+	static CuDarray<real> cell_phi_prev_(num_cells);
+
 	unsigned threads_count = 8;
-	unsigned blocks_count = static_cast<unsigned>(_nx + threads_count - 1) / threads_count;
+	unsigned blocks_count = static_cast<unsigned>(NX + threads_count - 1) / threads_count;
 	dim3 threads_per_block{ threads_count, threads_count, threads_count };
 	dim3 blocks_per_grid{ blocks_count, blocks_count, blocks_count };
 
 	if (need_init_phi) {
-		cell_mass.set_zero();
-		cell_phi_prev.set_zero();
-		cell_phi_curr.set_zero();
-		cell_phi_next.set_zero();
+		cell_mass_.set_zero();
+		cell_phi_prev_.set_zero();
+		cell_phi_curr_.set_zero();
+		cell_phi_next_.set_zero();
 	}
 
-	cell_info.set_zero();
-	cell_particles_count.set_zero();
-	particles_in_block.set_zero();
+	cell_info_.set_zero();
+	cell_particles_count_.set_zero();
+	particles_in_block_.set_zero();
 
-    CuCall(assignParticlesToCells, _over_particles, _over_blocks) (
-        particles_pos,
-        particles_cell_info,
-        cell_info,
-        cell_particles_count,
-        _num_particles
+    CuCall(assignParticlesToCells, over_particles, over_blocks) (
+        particles_pos_,
+        particles_cell_info_,
+        cell_info_,
+        cell_particles_count_,
+        num_particles
     );
-    CuCall(computePrefixSums, _over_cells, _over_blocks) (
-        cell_info,
-        particles_in_block,
-        _num_cells
+    CuCall(computePrefixSums, over_cells, over_blocks) (
+        cell_info_,
+        particles_in_block_,
+        num_cells
     );
-    CuCall(adjustGlobalPrefixSums, _over_cells, _over_blocks) (
-        cell_info,
-        particles_in_block,
-        _num_cells
+    CuCall(adjustGlobalPrefixSums, over_cells, over_blocks) (
+        cell_info_,
+        particles_in_block_,
+        num_cells
     );
-	CuCall(computeCellMassesUnsorted, _over_particles, _over_blocks) (
-		particles_mass,
-		particles_cell_info,
-		cell_mass,
-		_num_particles
+	CuCall(computeCellMassesUnsorted, over_particles, over_blocks) (
+		particles_mass_,
+		particles_cell_info_,
+		cell_mass_,
+		num_particles
 	);
 
 	for (int iter = 0; iter < iterations; ++iter) {
@@ -264,172 +363,353 @@ auto convert_particles(
 			std::cout << "wave_diss_iteration iter: " << iter << std::endl;
 		}
 		CuCall(wave_diss_iteration, blocks_per_grid, threads_per_block) (
-			cell_phi_next,
-			cell_phi_curr,
-			cell_phi_prev,
-			cell_mass
+			cell_phi_next_,
+			cell_phi_curr_,
+			cell_phi_prev_,
+			cell_mass_
 		);
-		swap(cell_phi_prev, cell_phi_curr);
-		swap(cell_phi_curr, cell_phi_next);
+		swap(cell_phi_prev_, cell_phi_curr_);
+		swap(cell_phi_curr_, cell_phi_next_);
 	}
 
-	std::vector<double> cell_mass_host(_num_cells);
-	std::vector<double> cell_phi_host(_num_cells);
-	std::vector<CellInfo> cell_info_host(_num_cells);
-	std::vector<ParticleCellInfo> particle_info_host(_num_particles);
-	cudaMemcpy(cell_mass_host.data(), cell_mass, _num_cells * sizeof(real), cudaMemcpyDeviceToHost);
-	cudaMemcpy(cell_phi_host.data(), cell_phi_curr, _num_cells * sizeof(real), cudaMemcpyDeviceToHost);
-	cudaMemcpy(cell_info_host.data(), cell_info, _num_cells * sizeof(CellInfo), cudaMemcpyDeviceToHost);
-	cudaMemcpy(particle_info_host.data(), particles_cell_info, _num_particles * sizeof(ParticleCellInfo), cudaMemcpyDeviceToHost);
+	CuDarray<double> cell_uforce_abs_(num_cells);
+	CuCall(uforce_field, over_cells, over_blocks) (
+		cell_uforce_,
+		cell_uforce_abs_,
+		cell_phi_curr_,
+		cell_mass_,
+		NX,
+		dx
+	);
+
+	std::vector<double> cell_mass = cell_mass_.to_vector();
+	std::vector<double> cell_phi = cell_phi_curr_.to_vector();
+	std::vector<CellInfo> cell_info = cell_info_.to_vector();
+	std::vector<ParticleCellInfo> particles_cell_info = particles_cell_info_.to_vector();
 
 	check_cell_particle_info_match(
-		cell_info_host,
-		particle_info_host,
-		_num_particles,
-		_num_cells
+		cell_info,
+		particles_cell_info,
+		num_particles,
+		num_cells
 	);
 
 	check_energy(
-		cell_mass_host,
-		cell_phi_host,
-		_num_cells
+		cell_mass,
+		cell_phi,
+		num_cells
 	);
 
 	check_particles_distribution(
-		cell_info_host
+		cell_info
 	);
 
 	check_mass(
-		cell_mass_host,
-		particles_mass.to_vector(),
-		_dx,
-		_domain_l,
-		_nx
+		cell_mass,
+		particles_mass_.to_vector(),
+		dx,
+		domain_l,
+		NX
 	);
 
-	const int NX = _nx;
-	const int IY = _nx / 2 ;
-	const int IZ = _nx / 2 ;
+	const int IY = NX / 2 ;
+	const int IZ = NX / 2 ;
 
 	// particle_counts
+	[
+		NX, IY, IZ,
+		num_cells, over_cells, over_blocks
+	]
 	{
-		CuDarray<double> particle_counts_(_num_cells);
-		CuCall(countParticles, _over_cells, _over_blocks) (
-			particle_counts_,
-			cell_info,
-			_num_cells
+		CuDarray<double> _particle_counts(num_cells);
+		CuCall(countParticles, over_cells, over_blocks) (
+			_particle_counts,
+			cell_info_,
+			num_cells
 		);
 
-		auto particle_counts = particle_counts_.to_vector();
+		auto particle_counts = _particle_counts.to_vector();
 
 		std::ofstream stream{ DEBUG_PATH / "particle_counts.txt" };
 		stream << "xi, counts" << std::endl;
-		for (size_t i = 0; i < _nx; ++i) {
+		for (size_t i = 0; i < NX; ++i) {
 			stream << i << ", " << particle_counts[at(i, IY, IZ)] << std::endl;
 		}
-	}
+	}();
 
 	// phi cell
+	[
+		NX, domain_l, dx, IY, IZ,
+		&cell_phi
+	]
 	{
 		std::ofstream stream{ DEBUG_PATH / "phi_cell.txt" };
 		stream << "x, phi" << std::endl;
-		for (size_t i = 0; i < _nx; ++i) {
-			double x = -_domain_l + i * _dx;
-			stream << std::format("{}, {:.7f}", x, cell_phi_host[at(i, IY, IZ)]) << std::endl;
+		for (size_t i = 0; i < NX; ++i) {
+			double x = -domain_l + i * dx;
+			stream << std::format("{}, {:.7f}", x, cell_phi[at(i, IY, IZ)]) << std::endl;
 		}
-	}
+	}();
 
-	// phi from particles
+	// phi from particles (NBODY)
+	[
+		NX, domain_l, dx, IY, IZ,
+		num_cells, num_particles, over_particles, over_blocks,
+		&particles_phi_
+	]
 	{
 		std::ofstream stream{ DEBUG_PATH / "phi_part.txt" };
 		stream << "x, phi" << std::endl;
 
-		CuDarray<double> phi_(_num_cells);
-		CuCall(computeCellPhiUnsorted, _over_particles, _over_blocks) (
-			particles_phi,
-			particles_cell_info,
-			cell_info,
-			phi_, // compute
-			_num_particles
+		CuDarray<double> cell_phi_from_particles_(num_cells);
+		CuCall(computeCellPhiUnsorted, over_particles, over_blocks) (
+			particles_phi_,
+			particles_cell_info_,
+			cell_info_,
+			cell_phi_from_particles_, // compute
+			num_particles
 		);
-		auto phi = phi_.to_vector();
+		auto phi = cell_phi_from_particles_.to_vector();
 
-		for (size_t i = 0; i < _nx; ++i) {
-			double x = -_domain_l + i * _dx;
+		for (size_t i = 0; i < NX; ++i) {
+			double x = -domain_l + i * dx;
 			stream << std::format("{}, {:.7f}", x, phi[at(i, IY, IZ)]) << std::endl;
 		}
-	}
+	}();
+
+	// acceleration abs in cell
+	[
+		domain_l, dx, NX, IY, IZ,
+		&cell_uforce_abs_
+	]
+	{
+		std::ofstream stream{ DEBUG_PATH / "acc_cell.txt" };
+		stream << "x, acc" << std::endl;
+
+		std::vector<double> cell_uforce_abs = cell_uforce_abs_.to_vector();
+		for (size_t i = 0; i < NX; ++i) {
+			double x = -domain_l + i * dx;
+			stream << std::format("{}, {:.7f}", x, cell_uforce_abs[at(i, IY, IZ)]) << std::endl;
+		}
+	}();
+
+	// acceleration (particles_phi -> cell_phi -> cell_acceleration)
+	[
+		domain_l, dx, NX, IY, IZ, over_blocks,
+		num_cells, over_cells,
+		num_particles, over_particles,
+		&particles_phi_
+	]
+	{
+		std::ofstream stream{ DEBUG_PATH / "acc_part.txt" };
+		stream << "x, acc" << std::endl;
+
+		CuDarray<double> _cell_phi_from_particles(num_cells);
+		CuCall(computeCellPhiUnsorted, over_particles, over_blocks) (
+			particles_phi_,
+			particles_cell_info_,
+			cell_info_,
+			_cell_phi_from_particles, // compute
+			num_particles
+		);
+		CuDarray<real3> _cell_acc_from_particles(num_cells);
+		CuDarray<double> _cell_acc_abs_from_particles(num_cells);
+		CuCall(uforce_field, over_cells, over_blocks) (
+			_cell_acc_from_particles,
+			_cell_acc_abs_from_particles,
+			_cell_phi_from_particles,
+			cell_mass_,
+			NX,
+			dx
+		);
+
+		std::vector<double> cell_acceleration_abs = _cell_acc_abs_from_particles.to_vector();
+		for (size_t i = 0; i < NX; ++i) {
+			double x = -domain_l + i * dx;
+			stream << std::format("{}, {:.7f}", x, cell_acceleration_abs[at(i, IY, IZ)]) << std::endl;
+		}
+	}();
+
+	// cell acc from nbody
+	[
+		NX, domain_l, dx, IY, IZ,
+		num_cells, num_particles, over_particles, over_blocks,
+		&particles_acc_,
+		&particles_mass_
+	] {
+		std::ofstream stream{ DEBUG_PATH / "nbody_cell_acc.txt" };
+		stream << "x, acc" << std::endl;
+
+		CuDarray<double> _nbody_part_acc(num_particles);
+		CuCall(acc_abs, over_particles, over_blocks) (
+			_nbody_part_acc,
+			particles_acc_,
+			num_particles
+		);
+
+		CuDarray<real> _nbody_cell_acc(num_cells);
+		CuCall(apply_particle_to_cell_weighted, over_particles, over_blocks) (
+			_nbody_cell_acc,
+			cell_mass_,
+			particles_mass_,
+			_nbody_part_acc,
+			particles_cell_info_,
+			num_particles
+		);
+
+		std::vector<double> nbody_cell_acc = _nbody_cell_acc.to_vector();
+		for (size_t i = 0; i < NX; ++i) {
+			double x = -domain_l + i * dx;
+			stream << std::format("{}, {:.7f}", x, nbody_cell_acc[at(i, IY, IZ)]) << std::endl;
+		}
+	}();
+
+	// cell acc to particles and back to cell
+	[
+		num_particles, over_particles, over_blocks, NX, num_cells,
+		domain_l, dx, IY, IZ,
+		&cell_uforce_abs_,
+		&particles_mass_
+	]
+	{
+		std::ofstream stream{ DEBUG_PATH / "acc_cell_cycle.txt" };
+		stream << "x, acc" << std::endl;
+
+		CuDarray<real3> _part_acc(num_particles);
+		CuDarray<real> _part_acc_abs(num_particles);
+		CuCall(apply_acceleration_to_particles, over_particles, over_blocks) (
+			_part_acc,
+			cell_uforce_,
+			particles_mass_,
+			particles_cell_info_,
+			num_particles
+		);
+		CuCall(acc_abs, over_particles, over_blocks) (
+			_part_acc_abs,
+			_part_acc,
+			num_particles
+		);
+		CuDarray<real> _cell_acc_cycle(num_cells);
+		CuCall(apply_particle_to_cell_weighted, over_particles, over_blocks) (
+			_cell_acc_cycle,
+			cell_mass_,
+			particles_mass_,
+			_part_acc_abs,
+			particles_cell_info_,
+			num_particles
+		);
+
+		std::vector<double> cell_acc_cycle = _cell_acc_cycle.to_vector();
+		for (size_t i = 0; i < NX; ++i) {
+			double x = -domain_l + i * dx;
+			stream << std::format("{}, {:.7f}", x, cell_acc_cycle[at(i, IY, IZ)]) << std::endl;
+		}
+	}();
 
 
-	// phi from particles cycle
-	// {
-	// 	zeroCellPhi<<<_over_particles, _over_blocks>>>(
-	// 		particles_phi,
-	// 		_num_particles,
-	// 		0.
-	// 	);
-	// 	zeroCellPhi<<<_over_cells, _over_blocks>>>(
-	// 		cell_phi_dev,
-	// 		_num_cells,
-	// 		100.
-	// 	);
-	// 	cudaDeviceSynchronize();
-	// 	apply_psi_to_particles<<<_over_particles, _over_blocks>>>(
-	// 		particles_phi,
-	// 		cell_phi_dev,
-	// 		cell_info,
-	// 		particles_cell_info,
-	// 		_num_particles
-	// 	);
-	// 	auto err = cudaDeviceSynchronize();
-	// 	printf("apply_psi_to_particles err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+	// particle acc from cell
+	[
+		num_particles, over_particles, over_blocks, NX,
+		&particles_mass_
+	] {
+		std::ofstream stream{ DEBUG_PATH / "cell_part_acc.txt" };
+		stream << "i, acc" << std::endl;
 
-	// 	zeroCellPhi<<<_over_cells, _over_blocks>>>(
-	// 		cell_phi_dev,
-	// 		_num_cells,
-	// 		0.
-	// 	);
-	// 	err = cudaDeviceSynchronize();
-	// 	printf("zeroCellPhi err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+		CuDarray<real3> _cell_part_acc(num_particles);
+		CuCall(apply_acceleration_to_particles, over_particles, over_blocks) (
+			_cell_part_acc,
+			cell_uforce_,
+			particles_mass_,
+			particles_cell_info_,
+			num_particles
+		);
 
-	// 	computeCellPhiUnsorted<<<_over_particles, _over_blocks>>>(
-	// 		particles_phi,
-	// 		particles_cell_info,
-	// 		cell_info,
-	// 		cell_phi_dev,
-	// 		_num_particles
-	// 	);
-	// 	err = cudaDeviceSynchronize();
-	// 	printf("computeCellPhiUnsorted err: %d (%s)\n", (int)err, cudaGetErrorName(err));
-	// 	cudaMemcpy(cell_phi_host.data(), cell_phi_dev, _num_cells * sizeof(real), cudaMemcpyDeviceToHost);
+		CuDarray<real> _cell_part_acc_abs(num_particles);
+		CuCall(acc_abs, over_particles, over_blocks) (
+			_cell_part_acc_abs,
+			_cell_part_acc,
+			num_particles
+		);
+		std::vector<double> cell_part_acc = _cell_part_acc_abs.to_vector();
+		std::cout << "cell part acc sum: " << std::accumulate(cell_part_acc.begin(), cell_part_acc.end(), 0.) << std::endl;
+		for (size_t i = 0; i < num_particles; ++i) {
+			stream << std::format("{}, {:.7f}", i, cell_part_acc[i]) << std::endl;
+		}
+	}();
 
-	// 	std::ofstream stream{ DEBUG_PATH / "phi_part_cycle.txt" };
-	// 	stream << "x, phi" << std::endl;
-	// 	const int NX = _nx;
-	// 	for (size_t i = 0; i < _nx; ++i) {
-	// 		int ix = i;
-	// 		int iy = IY;
-	// 		int iz = IZ;
-	// 		double x = -_domain_l + ix * _dx;
-	// 		stream << x << ", " << cell_phi_host[at(ix, iy, iz)] << std::endl;
-	// 	}
-	// }
+	// particle acc from nbody
+	[
+		num_particles, over_particles, over_blocks, NX,
+		&particles_acc_
+	] {
+		std::ofstream stream{ DEBUG_PATH / "nbody_part_acc.txt" };
+		stream << "i, acc" << std::endl;
 
-	// mass
+		CuDarray<double> _nbody_part_acc(num_particles);
+		CuCall(acc_abs, over_particles, over_blocks) (
+			_nbody_part_acc,
+			particles_acc_,
+			num_particles
+		);
+		std::vector<double> nbody_part_acc = _nbody_part_acc.to_vector();
+		std::cout << "nbody part acc sum: " << std::accumulate(nbody_part_acc.begin(), nbody_part_acc.end(), 0.) << std::endl;
+		for (size_t i = 0; i < num_particles; ++i) {
+			stream << std::format("{}, {:.7f}", i, nbody_part_acc[i]) << std::endl;
+		}
+	}();
 
-	// acceleration_field<<<blocks_per_grid, threads_per_block>>>(
-	// 	cell_acceleration,
-	// 	phi_dev,
-	// 	cell_mass,
-	// 	_nx,
-	// 	_dx
-	// );
-	// err = cudaDeviceSynchronize();
-	// printf("acceleration_field err: %d (%s)\n", (int)err, cudaGetErrorName(err));
+	// mass from cell
+	[
+		num_particles, over_particles, over_blocks, NX
+	] {
+		std::ofstream stream{ DEBUG_PATH / "mpart_from_cell.txt" };
+		stream << "i, acc" << std::endl;
 
-	// if (phi_dev != cell_phi_next) {
-	// 	cudaMemcpy(cell_phi_next, phi_dev, _num_cells * sizeof(real), cudaMemcpyDeviceToDevice);
-	// }
+		CuDarray<real> _mass_from_cell(num_particles);
+		CuCall(apply_cell_to_particles_avg, over_particles, over_blocks) (
+			_mass_from_cell,
+			cell_mass_,
+			particles_cell_info_,
+			cell_info_,
+			num_particles
+		);
+
+		std::vector<double> mass_from_cell = _mass_from_cell.to_vector();
+		std::cout << "total mpart from cell: "
+			<< std::accumulate(mass_from_cell.begin(), mass_from_cell.end(), 0.)
+			<< std::endl;
+
+		for (size_t i = 0; i < num_particles; ++i) {
+			stream << std::format("{}, {:.7f}", i, mass_from_cell[i]) << std::endl;
+		}
+	}();
+
+	// mass particles
+	[
+		num_particles, over_particles, over_blocks, NX,
+		&particles_mass_
+	] {
+		std::ofstream stream{ DEBUG_PATH / "mpart.txt" };
+		stream << "i, acc" << std::endl;
+
+		std::vector<double2> mass = particles_mass_.to_vector();
+
+		std::cout << "total mpart: "
+			<< std::accumulate(
+				mass.begin(),
+				mass.end(),
+				0.,
+				[](double sum, const double2& m) {
+					return sum + m.x;
+				}
+			)
+			<< std::endl;
+
+		for (size_t i = 0; i < num_particles; ++i) {
+			stream << std::format("{}, {:.7f}", i, mass[i].x) << std::endl;
+		}
+	}();
+
 }
 
 //---Host Function----
@@ -464,6 +744,12 @@ __host__ void print_particles_bin(
 	printf("print particles fin\n");
 }
 
+__host__ std::ios::openmode get_openmode(int it) {
+	return it == 0
+		? std::ios::out
+		: std::ios::app;
+}
+
 __host__ void  result(
 	const std::vector<real4>& pos,
 	const std::vector<real4>& vel,
@@ -476,7 +762,6 @@ __host__ void  result(
 {
 	printf("print result begin\n");
 
-	FILE *outf;
 	int Ns = d.Ns;
 	int NN = d.NN;
 	int i;
@@ -488,13 +773,15 @@ __host__ void  result(
 	real3 Imp = make_real3(0.0, 0.0, 0.0); // momentum
 	real3 L = make_real3(0.0, 0.0, 0.0); // angular momentum
 
-	//---Star------
-	print_particles_bin("S", 0, Ns, pos, vel, it, t);
+	if (it > 1 && it % 10 == 0) {
+		//---Star------
+		print_particles_bin("S", 0, Ns, pos, vel, it, t);
 
-	//---DM------
-  	if(NN > Ns) {
-		int Ndm = NN - Ns;
-		print_particles_bin("DM", Ns, Ndm, pos, vel, it, t);
+		//---DM------
+		if(NN > Ns) {
+			int Ndm = NN - Ns;
+			print_particles_bin("DM", Ns, Ndm, pos, vel, it, t);
+		}
 	}
 
   	Ek = 0.0;
@@ -544,13 +831,10 @@ __host__ void  result(
 		Imp0.z = Imp.z;
     	E0=E;
 
-		auto path = BIN_PATH / "LIE_0.bin";
-		auto path_str = path.string();
-		outf = fopen(path_str.c_str(), "wb");
-		fwrite(&L0, sizeof(real3), 1, outf);
-		fwrite(&Imp0, sizeof(real3), 1, outf);
-      	fwrite(&E0, sizeof(real), 1, outf);
-		fclose(outf);
+		std::ofstream stream{ BIN_PATH / "LIE_0.bin", std::ios::out | std::ios::binary };
+		stream.write(reinterpret_cast<const char*>(&L0), sizeof(real3));
+		stream.write(reinterpret_cast<const char*>(&Imp0), sizeof(real3));
+		stream.write(reinterpret_cast<const char*>(&E0), sizeof(real3));
 	}
 
 	real LL = sqrt(
@@ -601,80 +885,65 @@ __host__ void  result(
 	);
 
 	{
-		auto path = OUT_PATH / "Lz(t).dat";
-		auto path_str = path.string();
-		FILE* outf = (it == 0)
-			? fopen(path_str.c_str(), "w")
-			: fopen(path_str.c_str(), "a");
-		fprintf(outf, "%d %f %1.15f %g %g\n",
-			it_all,
-			t,
-			L.z,
-			L.z / L0.z - 1.0,
-			fabs(L.z / L0.z - 1.0)
-		);
-		fclose(outf);
+		std::ofstream stream{ OUT_PATH / "Lz(t).csv", get_openmode(it) };
+		if (0 == it) {
+			stream << "it, t, Lz, Lz_rel_err, Lz_rel_err_magnitude" << std::endl;
+		}
+
+		stream
+			<< it_all << ", "
+			<< t << ", "
+			<< std::format("{:.15f}", L.z) << ", "
+			<< (L.z / L0.z - 1.0) << ", "
+			<< std::fabs(L.z / L0.z - 1.0) << std::endl;
 	}
 
 	{
-		auto path = OUT_PATH / "LL(t).dat";
-		auto path_str = path.string();
-		FILE* outf = (it == 0)
-			? fopen(path_str.c_str(), "w")
-			: fopen(path_str.c_str(), "a");
-		fprintf(outf, "%d %f %1.15f %g %g\n",
-			it_all,
-			t,
-			LL,
-			LL / LL0 - 1.0,
-			fabs(LL / LL0 - 1.0)
-		);
-		fclose(outf);
+		std::ofstream stream{ OUT_PATH / "LL(t).csv", get_openmode(it) };
+		if (0 == it) {
+			stream << "it, t, LL, LL_rel_err, LL_rel_err_magnitude" << std::endl;
+		}
+
+		stream
+			<< it_all << ", "
+			<< t << ", "
+			<< std::format("{:.15f}", LL) << ", "
+			<< (LL / LL0 - 1.0) << ", "
+			<< std::fabs(LL / LL0 - 1.0) << std::endl;
 	}
 
 	{
-		auto path = OUT_PATH / "Imp(t).dat";
-		auto path_str = path.string();
-		FILE* outf = (it == 0)
-			? fopen(path_str.c_str(), "w")
-			: fopen(path_str.c_str(), "a");
-		real Impls = sqrt(
-			Imp.x * Imp.x +
-			Imp.y * Imp.y +
-			Imp.z * Imp.z
-		);
-		real Impls0 = sqrt(
-			Imp0.x * Imp0.x +
-			Imp0.y * Imp0.y +
-			Imp0.z * Imp0.z
-		);
-		fprintf(outf, "%d %f %1.15f %g %g %g\n",
-			it_all,
-			t,
-			Impls,
-			Impls - Impls0,
-			Impls / Impls0 - 1.0,
-			fabs(Impls / Impls0 - 1.0)
-		);
-		fclose(outf);
+		std::ofstream stream{ OUT_PATH / "Imp(t).csv", get_openmode(it) };
+		if (0 == it) {
+			stream << "it, t, Imp, Imp_abs_err, Imp_rel_err, Imp_rel_err_magnitude" << std::endl;
+		}
+
+		real Impls = norm3(Imp);
+		real Impls0 = norm3(Imp0);
+
+		stream
+			<< it_all << ", "
+			<< t << ", "
+			<< std::format("{:.15f}", Impls) << ", "
+			<< (Impls - Impls0) << ", "
+			<< (Impls / Impls0 - 1.0) << ", "
+			<< std::fabs(Impls / Impls0 - 1.0) << std::endl;
 	}
 
 	{
-		auto path = OUT_PATH / "Imp(t).dat";
-		auto path_str = path.string();
-		FILE* outf = (it == 0)
-			? fopen(path_str.c_str(), "w")
-			: fopen(path_str.c_str(), "a");
-		fprintf(outf, "%d %f %1.15f %g %g %g %g\n",
-			it_all,
-			t,
-			E,
-			E / E0 - 1.0,
-			fabs(E / E0 - 1.0),
-			0.5 * Ek,
-			0.5 * Ep
-		);
-		fclose(outf);
+		std::ofstream stream{ OUT_PATH / "E(t).csv", get_openmode(it) };
+		if (0 == it) {
+			stream << "it, t, E, E_rel_err, E_rel_err_magnitude, Ek, Ep" << std::endl;
+		}
+
+		stream
+			<< it_all << ", "
+			<< t << ", "
+			<< std::format("{:.15f}", E) << ", "
+			<< (E / E0 - 1.0) << ", "
+			<< std::fabs(E / E0 - 1.0) << ", "
+			<< (0.5 * Ek) << ", "
+			<< (0.5 * Ep) << std::endl;
 	}
 
 	printf("print result end\n");
@@ -811,7 +1080,8 @@ void check_computing_units_info() {
 	cudaSetDevice(0);
 }
 
-int main(int argc, char * argv[]) {
+void run() {
+
 	std::cout << std::endl;
 	std::cout << std::endl;
 	std::cout << std::endl;
@@ -820,18 +1090,12 @@ int main(int argc, char * argv[]) {
 
 	char temp[512];
 
-	real r, vr, vfi, fi;
   	char str[24];
 
 	//----GPU device------------------------------------------------
-	int j, i;
+	int i;
 
-
-	cudaEvent_t start, stop, start1, stop1;
 	float gpuTime = 0.0; //
-	float gpuTime_GFC = 0.0; // time between saves
-	float gpuTime_US = 0.0; // zero only ???
-	float gpuTime1 = 0.0; // time for single iteration
 	//-----Unitial State---------------------------------------------------------
 	real t = 0.0; // current time
 	real tmax = 0.0; // max simulation time
@@ -933,15 +1197,15 @@ int main(int argc, char * argv[]) {
 	const real root1 = sqrt(1.0 + (Rb*Rb)*rbcore2);
 	const real con = Mh / (rcore1 - atan(rcore1));
 	const real const1 = Mb / (b*log(Rb*rbcore1 + root1) - Rb / root1);
-	const real c_psi_h = con / a*(0.5*log(Rh2*Rh2 / a / a + 1.0) + atan(Rh2 / a)*a / Rh2) + Mh / Rh2;
-	const real c_psi_b = Mb / Rb - const1*log(Rb / b + root1) / Rb;
+	const real c_phi_h = con / a*(0.5*log(Rh2*Rh2 / a / a + 1.0) + atan(Rh2 / a)*a / Rh2) + Mh / Rh2;
+	const real c_phi_b = Mb / Rb - const1*log(Rb / b + root1) / Rb;
 	const real Mh_inf = Mh * (Rh2 / a - atan(Rh2 / a)) / (rcore1 - atan(rcore1));
 
 	printf("*****Rh2 = %g \n", Rh2);
 	printf("*****con = %g \n", con);
 	printf("*****const1 = %g \n", const1);
-	printf("*****c_psi_h = %g \n", c_psi_h);
-	printf("*****c_psi_b = %g \n", c_psi_b);
+	printf("*****c_phi_h = %g \n", c_phi_h);
+	printf("*****c_phi_b = %g \n", c_phi_b);
 
     constexpr int _nx = 200;
     constexpr double _dx = 0.1;
@@ -952,7 +1216,8 @@ int main(int argc, char * argv[]) {
 	const double _diss_extra = 0.01;
 	const double _sim_l = _domain_l;
 	const double _bc_l = _domain_l / 10.;
-	const int _iterations = 500;
+	const int _iterations_to_setup = 50;
+	std::cout << "dt_wave: " << _dt_wave << std::endl;
 
     real4 _domain_min{
         -_domain_l,
@@ -999,12 +1264,22 @@ int main(int argc, char * argv[]) {
 	std::vector<real4> vel_host(NN, make_real4(0., 0., 0., 0.));
 	std::vector<real2> mass_host(NN, make_real2(0., 0.));
 	std::vector<real> eps2_host(NN, 0.);
-	std::vector<real> psi_host(NN, 0.);
+	std::vector<real> phi_host(NN, 0.);
+	std::vector<real3> acc_host(NN, make_real3(0., 0., 0.));
 
 	std::vector<real> cell_mass_host(_num_cells, 0.);
 	std::vector<real> cell_phi_host(_num_cells,  0.);
 
 	//-----------------------------------------------------
+
+	ConvertParticlesParams convert_particles_params;
+	convert_particles_params.num_blocks = _num_cell_blocks;
+	convert_particles_params.num_cells = _num_cells;
+	convert_particles_params.num_particles = _num_particles;
+	convert_particles_params.nx = _nx;
+	convert_particles_params.over_blocks = _over_blocks;
+	convert_particles_params.over_cells = _over_cells;
+	convert_particles_params.over_particles = _over_particles;
 
 	d.Ns = Ns;
 	d.NN = NN;
@@ -1018,8 +1293,8 @@ int main(int argc, char * argv[]) {
 	d.Rh2 = Rh2;
 	d.con = con;
 	d.const1 = const1;
-	d.c_psi_h = c_psi_h;
-	d.c_psi_b = c_psi_b;
+	d.c_phi_h = c_phi_h;
+	d.c_phi_b = c_phi_b;
 	d.eps2 = eps2;
 	CuCopyToSymbol(d, dd, ToDevice);
 
@@ -1123,7 +1398,7 @@ int main(int argc, char * argv[]) {
 				FILE* outf = fopen(path_str.c_str(), "r");
           		if (NULL == outf) {
 					printf("Error OF -- %s ",str);
-					return 0;
+					exit(0);
 				}
           		else {
 					int itmp = 0;
@@ -1173,7 +1448,7 @@ int main(int argc, char * argv[]) {
 				outf = fopen(path_str.c_str(), "r");
           		if (NULL == outf) {
 					printf("Error OF -- %s ",str);
-					return 0;
+					exit(0);
 				}
 				else {
 					int itmp = 0;
@@ -1229,86 +1504,273 @@ int main(int argc, char * argv[]) {
 	CuDarray<real4> vel_(vel_host);
 	CuDarray<real2> mass_(mass_host);
 	CuDarray<real> eps2_(eps2_host);
-	CuDarray<real> psi_(psi_host);
+	CuDarray<real> phi_(phi_host);
 	CuDarray<real4> post_(_num_particles);
 	CuDarray<real4> velt_(_num_particles);
 	CuDarray<real3> acc_(_num_particles);
 	CuDarray<real3> acct_(_num_particles);
 
-	CuDarray<CellInfo> cell_info_(_num_cells);
-	CuDarray<int> cell_particles_count_(_num_cells);
-	CuDarray<real> cell_mass_(_num_cells);
+	std::cout << "GPU memory allocated for nbody particles: " << CuDarrayBase::get_total_allocated_mb() << " mb" << std::endl;
+
 	CuDarray<real> cell_phi_prev_(_num_cells);
 	CuDarray<real> cell_phi_curr_(_num_cells);
-	CuDarray<real> cell_phi_next_(_num_cells);
-	CuDarray<real3> cell_acceleration_(_num_cells);
 
-	CuDarray<ParticleCellInfo> particles_cell_info_(_num_particles);
-
-	CuDarray<int> particles_in_block_(_num_cell_blocks);
 
 	//------Расчет грав. сил-----------------------------------------------------
 	printf("calc grav forces\n");
-	CuCall(PSI_kernel, NN / BLOCK_SIZE, BLOCK_SIZE) (
-		psi_,
-		pos_,
-		pos_,
-		mass_,
-		eps2_
-	);
+	// {
+	// 	CuCall(PSI_kernel, NN / BLOCK_SIZE, BLOCK_SIZE) (
+	// 		phi_,
+	// 		pos_,
+	// 		pos_,
+	// 		mass_,
+	// 		eps2_
+	// 	);
+	// 	CuCall(ACCEL, NN / BLOCK_SIZE, BLOCK_SIZE) (
+	// 		acc_,
+	// 		pos_,
+	// 		pos_,
+	// 		mass_,
+	// 		eps2_
+	// 	);
+	// }
 
-	convert_particles(
-		psi_,
-		pos_,
-		mass_,
-		cell_info_,
-		cell_particles_count_,
-		particles_in_block_,
-		particles_cell_info_,
-		cell_mass_,
+	std::tie(
+		acc_,
+		phi_,
 		cell_phi_prev_,
-		cell_phi_curr_,
-		cell_phi_next_,
-		cell_acceleration_,
-		_over_cells,
-		_over_blocks,
-		_over_particles,
-		_num_cells,
-		_num_cell_blocks,
-		_num_particles,
-		_domain_l,
-		_nx,
-		_dx,
-		_iterations,
-		true
+		cell_phi_curr_
+	) = calc_acceleration_by_grid(
+		convert_particles_params,
+		pos_,
+		mass_,
+		std::move(acc_),
+		std::move(phi_),
+		std::move(cell_phi_prev_),
+		std::move(cell_phi_curr_),
+		_iterations_to_setup
 	);
 
-	// apply_acceleration_to_particles<<<_over_particles, _over_blocks>>>(
+	// convert_particles(
+	// 	phi_,
 	// 	acc_,
-	// 	cell_acceleration_,
-	// 	particles_cell_info_,
-	// 	_num_particles
+	// 	pos_,
+	// 	mass_,
+	// 	_over_cells,
+	// 	_over_blocks,
+	// 	_over_particles,
+	// 	_num_cells,
+	// 	_num_cell_blocks,
+	// 	_num_particles,
+	// 	_domain_l,
+	// 	_nx,
+	// 	_dx,
+	// 	_iterations,
+	// 	true
 	// );
-	// auto err = cudaDeviceSynchronize();
-	// printf("apply_acceleration_to_particles err: %d (%s)\n", (int)err, cudaGetErrorName(err));
 
-	// apply_psi_to_particles<<<_over_particles, _over_blocks>>>(
-	// 	psi_,
-	// 	cell_phi_next_,
-	// 	cell_info_,
-	// 	particles_cell_info_,
-	// 	_num_particles
-	// );
-	// err = cudaDeviceSynchronize();
-	// printf("apply_psi_to_particles err: %d (%s)\n", (int)err, cudaGetErrorName(err));
 
 	printf("calc grav forces: copy to host\n");
-	psi_.to_vector(psi_host);
+	phi_.to_vector(phi_host);
 
 	if(it == 1) {
 		printf("***Start result t=0***\n");
-		result(pos_host, vel_host, mass_host, 0, 0.0, psi_host, 0);
+		result(pos_host, vel_host, mass_host, 0, 0.0, phi_host, 0);
 	}
 
+	CuTimer timer_between_saves;
+	timer_between_saves.start();
+
+	do {
+		// --- Nbody и самогравитация
+		CuTimer timer_base_cycle;
+		timer_base_cycle.start();
+
+		//------Nbody predictor (tn+dtgrav)----------------------------------------------------------------------------
+		printf("Nbody predictor %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
+		CuCall(kernelNbody_integTime, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
+			acc_,
+			post_,
+			velt_,
+			pos_,
+			vel_,
+			dtgrav,
+			0,
+			tgrav - dtgrav,
+			acc_
+		);
+
+		//------Расчет самогравитации Nbody частиц-----------------------------------------------------
+		printf("Nbody grav %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
+		std::cout << "Wave eq iterations: " << (int)(dtgrav / _dt_wave) << std::endl;
+		acct_.set_zero();
+		std::tie(
+			acct_,
+			phi_,
+			cell_phi_prev_,
+			cell_phi_curr_
+		) = calc_acceleration_by_grid(
+			convert_particles_params,
+			post_,
+			mass_,
+			std::move(acct_),
+			std::move(phi_),
+			std::move(cell_phi_prev_),
+			std::move(cell_phi_curr_),
+			dtgrav / _dt_wave
+		);
+
+		//------Nbody corrector (tn+dtgrav)----------------------------------------------------------------------------
+		printf("Nbody corrector %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
+		CuCall(kernelNbody_integTime, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
+			acct_,
+			pos_,
+			vel_,
+			post_,
+			velt_,
+			dtgrav,
+			1,
+			tgrav,
+			acc_
+		);
+
+
+		timer_base_cycle.stop();
+		float time_base_cycle_sec = timer_base_cycle.elapsedSeconds();
+		//----------------------------------------------------------------------------------------------------------------------
+
+		printf("predictor-grav-corrector time: %lf s\n", time_base_cycle_sec);
+
+		ittg++;
+		itg++;
+		t = tgrav;
+		tgrav = itg * dtgrav;
+		it_grav++;
+
+		if (it_grav >= is_grav) {
+			tsave = tgrav;
+			//Copy data GPU to CPU
+			printf("Copy data GPU to CPU: redo PSI_kernel\n");
+
+			// phi_.set_zero();
+			// CuCall(PSI_kernel, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
+			// 	phi_,
+			// 	pos_,
+			// 	pos_,
+			// 	mass_,
+			// 	eps2_
+			// );
+
+			printf("Copy data GPU to CPU\n");
+			pos_.to_vector(pos_host);
+			vel_.to_vector(vel_host);
+			mass_.to_vector(mass_host);
+			phi_.to_vector(phi_host);
+			acc_.to_vector(acc_host);
+			timer_between_saves.stop();
+			float time_between_saves_sec = timer_between_saves.elapsedSeconds();
+			timer_between_saves.start();
+
+			printf("time between saves: %g s", time_between_saves_sec);
+
+			gpuTime += time_between_saves_sec;
+			printf("--------------------------------------------------------------------------------\n");
+
+			printf("<Time_frame> = %.3f s, frame = %d, iter = %d, iter_g = %d\n",
+				gpuTime,
+				it,
+				itt,
+				ittg
+			);
+			printf("Time = (%g,  %g) ---  dt = (%g,  %g)\n",
+				t,
+				tgrav - dtgrav,
+				dtsave / itt,
+				dtgrav
+			);
+
+			// print sample particle:
+			{
+				std::fstream::openmode openmode = it == 1
+					? std::fstream::out
+					: std::fstream::app;
+
+				std::ofstream stream_sample{ OUT_PATH / "sample.csv", openmode };
+
+				if (1 == it) {
+					stream_sample << "it, t, i, r, fi, z, acc, phi, rho, e, h, Vr, Vfi, Vz" << std::endl;
+				}
+
+				int i = 1;
+				real fi = atan2(pos_host[i].y, pos_host[i].x);
+				real r = norm2(make_real2(pos_host[i].x, pos_host[i].y));
+				real vr = (vel_host[i].x*pos_host[i].x + vel_host[i].y*pos_host[i].y) / r;
+				real vfi = (vel_host[i].y*pos_host[i].x - vel_host[i].x*pos_host[i].y) / r;
+				real acc_abs = norm3(acc_host[i]);
+
+				stream_sample
+					<< it * itt << ", "
+					<< t << ", "
+					<< i << ", "
+					<< r << ", "
+					<< fi << ", "
+					<< pos_host[i].z << ", "
+					<< acc_abs << ", "
+					<< phi_host[i] << ", "   // phi
+					<< pos_host[i].w << ", " // rho
+					<< vel_host[i].w << ", " // e
+					<< mass_host[i].y << ", " // h
+					<< vr << ", "
+					<< vfi << ", "
+					<< vel_host[i].z << std::endl;
+
+
+				std::string str_1 = std::format(
+					"i={0} :: rho[{0}] = {1}, e[{0}] = {2}, h[{0}] = {3}",
+					i,
+					pos_host[i].w,
+					vel_host[i].w,
+					mass_host[i].y
+				);
+				std::string str_2 = std::format(
+					"Vr[{0}] = {1}, Vfi[{0}] = {2}, Vz[{0}] = {3}",
+					i,
+					vr,
+					vfi,
+					vel_host[i].z
+				);
+				std::string str_3 = std::format(
+					"r[{0}] = {1}, fi[{0}] = {2}, z[{0}] = {3}",
+					i,
+					r,
+					fi,
+					pos_host[i].z
+				);
+
+				std::cout << str_1 << std::endl;
+				std::cout << str_2 << std::endl;
+				std::cout << str_3 << std::endl;
+			}
+
+
+			result(pos_host, vel_host, mass_host, it, t, phi_host, it*itt);
+
+			tsave += dtsave; it++;
+			itt = 0; ittg = 0;
+			it_grav = 0;
+		}
+		itt++;
+	} while (t < tmax);
+
+}
+
+int main(int argc, char * argv[]) {
+
+	try {
+		run();
+	}
+	catch (const std::exception& ex) {
+		std::cerr << "Error: " << ex.what() << std::endl;
+	}
 	return 0;
 }
