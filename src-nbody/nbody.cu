@@ -109,7 +109,7 @@ auto check_mass(
 	stream << "x, mass" << std::endl;
 	for (size_t i = 0; i < NX; ++i) {
 		double x = -domain_l + i * dx;
-		stream << std::format("{}, {:.6f}", x, cell_mass[at(i, IY, IZ)]) << std::endl;
+		stream << std::format("{}, {:.6f}", x, cell_mass[AT(i, IY, IZ)]) << std::endl;
 	}
 
 	std::cout
@@ -429,7 +429,7 @@ auto convert_particles(
 		std::ofstream stream{ DEBUG_PATH / "particle_counts.txt" };
 		stream << "xi, counts" << std::endl;
 		for (size_t i = 0; i < NX; ++i) {
-			stream << i << ", " << particle_counts[at(i, IY, IZ)] << std::endl;
+			stream << i << ", " << particle_counts[AT(i, IY, IZ)] << std::endl;
 		}
 	}();
 
@@ -443,7 +443,7 @@ auto convert_particles(
 		stream << "x, phi" << std::endl;
 		for (size_t i = 0; i < NX; ++i) {
 			double x = -domain_l + i * dx;
-			stream << std::format("{}, {:.7f}", x, cell_phi[at(i, IY, IZ)]) << std::endl;
+			stream << std::format("{}, {:.7f}", x, cell_phi[AT(i, IY, IZ)]) << std::endl;
 		}
 	}();
 
@@ -469,7 +469,7 @@ auto convert_particles(
 
 		for (size_t i = 0; i < NX; ++i) {
 			double x = -domain_l + i * dx;
-			stream << std::format("{}, {:.7f}", x, phi[at(i, IY, IZ)]) << std::endl;
+			stream << std::format("{}, {:.7f}", x, phi[AT(i, IY, IZ)]) << std::endl;
 		}
 	}();
 
@@ -485,7 +485,7 @@ auto convert_particles(
 		std::vector<double> cell_acc_abs = cell_acc_abs_.to_vector();
 		for (size_t i = 0; i < NX; ++i) {
 			double x = -domain_l + i * dx;
-			stream << std::format("{}, {:.7f}", x, cell_acc_abs[at(i, IY, IZ)]) << std::endl;
+			stream << std::format("{}, {:.7f}", x, cell_acc_abs[AT(i, IY, IZ)]) << std::endl;
 		}
 	}();
 
@@ -521,7 +521,7 @@ auto convert_particles(
 		std::vector<double> cell_acceleration_abs = _cell_acc_abs_from_particles.to_vector();
 		for (size_t i = 0; i < NX; ++i) {
 			double x = -domain_l + i * dx;
-			stream << std::format("{}, {:.7f}", x, cell_acceleration_abs[at(i, IY, IZ)]) << std::endl;
+			stream << std::format("{}, {:.7f}", x, cell_acceleration_abs[AT(i, IY, IZ)]) << std::endl;
 		}
 	}();
 
@@ -555,7 +555,7 @@ auto convert_particles(
 		std::vector<double> nbody_cell_acc = _nbody_cell_acc.to_vector();
 		for (size_t i = 0; i < NX; ++i) {
 			double x = -domain_l + i * dx;
-			stream << std::format("{}, {:.7f}", x, nbody_cell_acc[at(i, IY, IZ)]) << std::endl;
+			stream << std::format("{}, {:.7f}", x, nbody_cell_acc[AT(i, IY, IZ)]) << std::endl;
 		}
 	}();
 
@@ -595,7 +595,7 @@ auto convert_particles(
 		std::vector<double> cell_acc_cycle = _cell_acc_cycle.to_vector();
 		for (size_t i = 0; i < NX; ++i) {
 			double x = -domain_l + i * dx;
-			stream << std::format("{}, {:.7f}", x, cell_acc_cycle[at(i, IY, IZ)]) << std::endl;
+			stream << std::format("{}, {:.7f}", x, cell_acc_cycle[AT(i, IY, IZ)]) << std::endl;
 		}
 	}();
 
@@ -720,7 +720,7 @@ __host__ void print_cell_phi(
 	int IZ = NX / 2;
 	for (size_t i = 0; i < NX; ++i) {
 		double x = -wave_eq_data.sim_l + i * wave_eq_data.dx_wave;
-		stream << std::format("{}, {:.7f}", x, cell_phi[at(i, IY, IZ)]) << std::endl;
+		stream << std::format("{}, {:.7f}", x, cell_phi[AT(i, IY, IZ)]) << std::endl;
 	}
 }
 
@@ -1126,10 +1126,14 @@ void run() {
 	printf("*****c_phi_h = %g \n", c_phi_h);
 	printf("*****c_phi_b = %g \n", c_phi_b);
 
-	NBodySolver solver = NBodySolver::Nbody;
+	enum class NBodySolver {
+		Nbody,
+		Wave
+	};
+	NBodySolver solver = NBodySolver::Wave;
 
-    constexpr int _nx = 400;
-    constexpr double _dx = 0.1;
+    constexpr int _nx = 200;
+    constexpr double _dx = 0.2;
     constexpr double _domain_l = 0.5 * _nx * _dx;
 	constexpr double _c_wave = 4574.337022617616;
 	const double _dt_wave = 0.5 * _dx / (_c_wave * sqrt(3));
@@ -1237,6 +1241,10 @@ void run() {
 
 	printf("***Input Data***\n");
 
+	int M_glx = galaxy_properties.size();
+	int k = 0;
+	int Ns = 0;
+	int Ndm = 0;
   	if (i_cont > 0) {
 
 		//---Stars---
@@ -1248,17 +1256,17 @@ void run() {
 			fread(&t, sizeof(double), 1, outf);
 			int n0 = 0;
 			for(k = 0; k < M_glx; k++) {
-				for (i = n0; i < n0 + N_s[k]; i++) {
+				for (i = n0; i < n0 + galaxy_properties[k].get_n_star_particles(); i++) {
 					fread(&pos_host[i].x, sizeof(double), 1, outf);
 					fread(&pos_host[i].y, sizeof(double), 1, outf);
 					fread(&pos_host[i].z, sizeof(double), 1, outf);
 					fread(&vel_host[i].x, sizeof(double), 1, outf);
 					fread(&vel_host[i].y, sizeof(double), 1, outf);
 					fread(&vel_host[i].z, sizeof(double), 1, outf);
-					mass_host[i].x = mp_s[k];
-					eps2_host[i] = eps_s[k]*eps_s[k];
+					mass_host[i] = galaxy_properties[k].get_mass_star_particle();
+					eps2_host[i] = galaxy_properties[k].eps_stars * galaxy_properties[k].eps_stars;
 				}
-				n0 += N_s[k];
+				n0 += galaxy_properties[k].get_n_star_particles();
 			}
 			fclose(outf);
 		}
@@ -1272,17 +1280,17 @@ void run() {
           	fread(&t, sizeof(double), 1, outf);
 			int n0=0;
 			for(k=0; k<M_glx; k++) {
-           		for (i = n0+Ns; i < n0+Ns+N_dm[k]; i++) {
+           		for (i = n0+Ns; i < n0+Ns+galaxy_properties[k].get_n_dark_particles(); i++) {
 					fread(&pos_host[i].x, sizeof(double), 1, outf);
 					fread(&pos_host[i].y, sizeof(double), 1, outf);
 					fread(&pos_host[i].z, sizeof(double), 1, outf);
 					fread(&vel_host[i].x, sizeof(double), 1, outf);
 					fread(&vel_host[i].y, sizeof(double), 1, outf);
 					fread(&vel_host[i].z, sizeof(double), 1, outf);
-					mass_host[i].x = mp_dm[k];
-					eps2_host[i] = eps_dm[k]*eps_dm[k];
+					mass_host[i] = galaxy_properties[k].get_mass_dark_particle();
+					eps2_host[i] = galaxy_properties[k].eps_dark * galaxy_properties[k].eps_dark;
 				}
-				n0 += N_dm[k];
+				n0 += galaxy_properties[k].get_n_dark_particles();
 			}
         	fclose(outf);
 		}
@@ -1310,7 +1318,7 @@ void run() {
 		//----Stars-------------------------------
 		int n0 = 0;
       	for(k = 0; k < M_glx; k++) {
-      		if(N_s[k] > 0) {
+      		if(galaxy_properties[k].get_n_star_particles() > 0) {
 				auto path = INI_PATH / std::format("start_S{}.txt", k);
 				auto path_str = path.string();
 				FILE* outf = fopen(path_str.c_str(), "r");
@@ -1323,7 +1331,7 @@ void run() {
 					real rtmp = 0.0;
             		fscanf(outf, "%d %lf", &itmp, &rtmp);
               		printf("N_s[%d] = %d, t = %f\n", k, itmp, rtmp);
-              		for(i = n0; i < n0 + N_s[k]; ++i) {
+              		for(i = n0; i < n0 + galaxy_properties[k].get_n_star_particles(); ++i) {
 						fscanf(outf, "%lf %lf %lf %lf %lf %lf",
 							&pos_host[i].x,
 							&pos_host[i].y,
@@ -1332,34 +1340,34 @@ void run() {
 							&vel_host[i].y,
 							&vel_host[i].z
 						);
-						mass_host[i].x = mp_s[k];
+						mass_host[i] = galaxy_properties[k].get_mass_star_particle();
 
-						pos_host[i].x = X_glx[k]
-						 	+ pos_host[i].x * cos(alpha_glx[k])
-							+ pos_host[i].z * sin(alpha_glx[k]);
-						pos_host[i].y += Y_glx[k];
-						pos_host[i].z = Z_glx[k]
-							+ pos_host[i].z * cos(alpha_glx[k])
-							- pos_host[i].x * sin(alpha_glx[k]);
+						pos_host[i].x = galaxy_properties[k].pos_center.x
+						 	+ pos_host[i].x * cos(galaxy_properties[k].get_angle_rad())
+							+ pos_host[i].z * sin(galaxy_properties[k].get_angle_rad());
+						pos_host[i].y += galaxy_properties[k].pos_center.y;
+						pos_host[i].z = galaxy_properties[k].pos_center.z
+							+ pos_host[i].z * cos(galaxy_properties[k].get_angle_rad())
+							- pos_host[i].x * sin(galaxy_properties[k].get_angle_rad());
 
-						vel_host[i].x = Vx_glx[k]
-							+ vel_host[i].x * cos(alpha_glx[k])
-							+ vel_host[i].z * sin(alpha_glx[k]);
-						vel_host[i].y += Vy_glx[k];
-						vel_host[i].z = Vz_glx[k]
-							+ vel_host[i].z * cos(alpha_glx[k])
-							- vel_host[i].x * sin(alpha_glx[k]);
+						vel_host[i].x = galaxy_properties[k].vel_center.x
+							+ vel_host[i].x * cos(galaxy_properties[k].get_angle_rad())
+							+ vel_host[i].z * sin(galaxy_properties[k].get_angle_rad());
+						vel_host[i].y += galaxy_properties[k].vel_center.y;
+						vel_host[i].z = galaxy_properties[k].vel_center.z
+							+ vel_host[i].z * cos(galaxy_properties[k].get_angle_rad())
+							- vel_host[i].x * sin(galaxy_properties[k].get_angle_rad());
 
-						eps2_host[i] = eps_s[k]*eps_s[k];
+						eps2_host[i] = galaxy_properties[k].eps_stars * galaxy_properties[k].eps_stars;
               		}
           		}
 				fclose(outf);
-          		n0 += N_s[k];
+          		n0 += galaxy_properties[k].get_n_star_particles();
         	}
 		}
 		//----DM-------------------------------
 		for (k = 0; k < M_glx; k++) {
-			if (N_dm[k] > 0) {
+			if (galaxy_properties[k].get_n_dark_particles() > 0) {
 				FILE* outf = NULL;
 				auto path = INI_PATH / std::format("start_DM{}.txt", k);
 				auto path_str = path.string();
@@ -1373,7 +1381,7 @@ void run() {
 					real rtmp = 0.0;
 					fscanf(outf, "%d %lf", &itmp, &rtmp);
 					printf("N_dm[%d] = %d, t = %f\n", k, itmp, rtmp);
-					for(i = n0; i < n0 + N_dm[k]; ++i) {
+					for(i = n0; i < n0 + galaxy_properties[k].get_n_dark_particles(); ++i) {
 						fscanf(outf, "%lf %lf %lf %lf %lf %lf",
 							&pos_host[i].x,
 							&pos_host[i].y,
@@ -1383,29 +1391,29 @@ void run() {
 							&vel_host[i].z
 						);
 
-						mass_host[i].x = mp_dm[k];
+						mass_host[i] = galaxy_properties[k].get_mass_dark_particle();
 
-						pos_host[i].x = X_glx[k]
-							+ pos_host[i].x * cos(alpha_glx[k])
-							+ pos_host[i].z * sin(alpha_glx[k]);
-						pos_host[i].y += Y_glx[k];
-						pos_host[i].z = Z_glx[k]
-							+ pos_host[i].z * cos(alpha_glx[k])
-							- pos_host[i].x * sin(alpha_glx[k]);
+						pos_host[i].x = galaxy_properties[k].pos_center.x
+						 	+ pos_host[i].x * cos(galaxy_properties[k].get_angle_rad())
+							+ pos_host[i].z * sin(galaxy_properties[k].get_angle_rad());
+						pos_host[i].y += galaxy_properties[k].pos_center.y;
+						pos_host[i].z = galaxy_properties[k].pos_center.z
+							+ pos_host[i].z * cos(galaxy_properties[k].get_angle_rad())
+							- pos_host[i].x * sin(galaxy_properties[k].get_angle_rad());
 
-						vel_host[i].x = Vx_glx[k]
-							+ vel_host[i].x * cos(alpha_glx[k])
-							+ vel_host[i].z * sin(alpha_glx[k]);
-						vel_host[i].y += Vy_glx[k];
-						vel_host[i].z = Vz_glx[k]
-							+ vel_host[i].z * cos(alpha_glx[k])
-							- vel_host[i].x * sin(alpha_glx[k]);
+						vel_host[i].x = galaxy_properties[k].vel_center.x
+							+ vel_host[i].x * cos(galaxy_properties[k].get_angle_rad())
+							+ vel_host[i].z * sin(galaxy_properties[k].get_angle_rad());
+						vel_host[i].y += galaxy_properties[k].vel_center.y;
+						vel_host[i].z = galaxy_properties[k].vel_center.z
+							+ vel_host[i].z * cos(galaxy_properties[k].get_angle_rad())
+							- vel_host[i].x * sin(galaxy_properties[k].get_angle_rad());
 
-						eps2_host[i] = eps_dm[k]*eps_dm[k];
+						eps2_host[i] = galaxy_properties[k].eps_dark * galaxy_properties[k].eps_dark;
 					}
 				}
 				fclose(outf);
-				n0 += N_dm[k];
+				n0 += galaxy_properties[k].get_n_dark_particles();
 			}
 		}
 		tsave = dtsave;
@@ -1589,17 +1597,18 @@ void run() {
 		if (it_grav >= is_grav) {
 			tsave = tgrav;
 			//Copy data GPU to CPU
-			printf("Copy data GPU to CPU: redo PSI_kernel\n");
 
-			phi_.set_zero();
-			CuCall(PHI_kernel, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
-				phi_,
-				pos_,
-				pos_,
-				mass_,
-				eps2_
-			);
-			{
+			if (solver == NBodySolver::Nbody) {
+				printf("Copy data GPU to CPU: redo PSI_kernel\n");
+				phi_.set_zero();
+				CuCall(PHI_kernel, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
+					phi_,
+					pos_,
+					pos_,
+					mass_,
+					eps2_
+				);
+
 				static CuDarray<ParticleCellInfo> particles_cell_info_(_num_particles);
 				static CuDarray<CellInfo> cell_info_(_num_cells);
 				static CuDarray<int> cell_particles_count_(_num_cells);
@@ -1624,6 +1633,7 @@ void run() {
 					_num_particles
 				);
 			}
+
 
 			printf("Copy data GPU to CPU\n");
 			pos_.to_vector(pos_host);

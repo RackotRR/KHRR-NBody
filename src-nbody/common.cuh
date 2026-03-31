@@ -72,7 +72,7 @@ struct WaveEqData {
 __constant__ DataBlock dd;
 __constant__ WaveEqData wave_eq_data_;
 
-#define at(x, y, z) ((x) + (y) * (NX) + (z) * (NX) * (NX))
+#define AT(x, y, z) ((x) + (y) * (NX) + (z) * (NX) * (NX))
 
 inline __host__ __device__ real dot2(const real2& vec1, const real2& vec2) {
 	return

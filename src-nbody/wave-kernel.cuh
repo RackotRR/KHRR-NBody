@@ -33,7 +33,7 @@ __global__ void wave_diss_iteration(
     double y = iy * DX;
     double z = iz * DX;
 
-	double rho = mass[at(ix, iy, iz)] / (DX * DX * DX);
+	double rho = mass[AT(ix, iy, iz)] / (DX * DX * DX);
 	const double G = 1.;
 	double f = 4 * PI * G * rho;
 
@@ -86,18 +86,18 @@ __global__ void wave_diss_iteration(
 #define _IS_Z_EDGE _IS_I_EDGE(iz)
 
     if (_IS_X_EDGE || _IS_Y_EDGE || _IS_Z_EDGE) {
-        phi_new[at(ix, iy, iz)] = 0.;
+        phi_new[AT(ix, iy, iz)] = 0.;
     }
     else {
-        phi_new[at(ix, iy, iz)] =
-            phi[at(ix - 1, iy, iz)] * _K_MAIN +
-            phi[at(ix + 1, iy, iz)] * _K_MAIN +
-            phi[at(ix, iy - 1, iz)] * _K_MAIN +
-            phi[at(ix, iy + 1, iz)] * _K_MAIN +
-            phi[at(ix, iy, iz - 1)] * _K_MAIN +
-            phi[at(ix, iy, iz + 1)] * _K_MAIN +
-            phi[at(ix, iy, iz)] * _K_ACTUAL +
-            phi_old[at(ix, iy, iz)] * _K_OLD +
+        phi_new[AT(ix, iy, iz)] =
+            phi[AT(ix - 1, iy, iz)] * _K_MAIN +
+            phi[AT(ix + 1, iy, iz)] * _K_MAIN +
+            phi[AT(ix, iy - 1, iz)] * _K_MAIN +
+            phi[AT(ix, iy + 1, iz)] * _K_MAIN +
+            phi[AT(ix, iy, iz - 1)] * _K_MAIN +
+            phi[AT(ix, iy, iz + 1)] * _K_MAIN +
+            phi[AT(ix, iy, iz)] * _K_ACTUAL +
+            phi_old[AT(ix, iy, iz)] * _K_OLD +
             f * _K_F;
     }
 }

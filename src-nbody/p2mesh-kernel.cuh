@@ -178,38 +178,38 @@ __global__ void acc_field(
     int iy = threadIdx.y + blockIdx.y * blockDim.y;
     int iz = threadIdx.z + blockIdx.z * blockDim.z;
 
-	int xyz = at(ix, iy, iz);
+	int xyz = AT(ix, iy, iz);
 
 	real3 dphi;
 
 	if (ix == 0) {
-		dphi.x = cell_phi[at(ix + 1, iy, iz)] - cell_phi[xyz];
+		dphi.x = cell_phi[AT(ix + 1, iy, iz)] - cell_phi[xyz];
 	}
 	else if (ix == NX - 1) {
-		dphi.x = cell_phi[xyz] - cell_phi[at(ix - 1, iy, iz)];
+		dphi.x = cell_phi[xyz] - cell_phi[AT(ix - 1, iy, iz)];
 	}
 	else {
-		dphi.x = 0.5 * (cell_phi[at(ix + 1, iy, iz)] - cell_phi[at(ix - 1, iy, iz)]);
+		dphi.x = 0.5 * (cell_phi[AT(ix + 1, iy, iz)] - cell_phi[AT(ix - 1, iy, iz)]);
 	}
 
 	if (iy == 0) {
-		dphi.y = cell_phi[at(ix, iy + 1, iz)] - cell_phi[xyz];
+		dphi.y = cell_phi[AT(ix, iy + 1, iz)] - cell_phi[xyz];
 	}
 	else if (iy == NX - 1) {
-		dphi.y = cell_phi[xyz] - cell_phi[at(ix, iy - 1, iz)];
+		dphi.y = cell_phi[xyz] - cell_phi[AT(ix, iy - 1, iz)];
 	}
 	else {
-		dphi.y = 0.5 * (cell_phi[at(ix, iy + 1, iz)] - cell_phi[at(ix, iy - 1, iz)]);
+		dphi.y = 0.5 * (cell_phi[AT(ix, iy + 1, iz)] - cell_phi[AT(ix, iy - 1, iz)]);
 	}
 
 	if (iz == 0) {
-		dphi.z = cell_phi[at(ix, iy, iz + 1)] - cell_phi[xyz];
+		dphi.z = cell_phi[AT(ix, iy, iz + 1)] - cell_phi[xyz];
 	}
 	else if (iz == NX - 1) {
-		dphi.z = cell_phi[xyz] - cell_phi[at(ix, iy, iz - 1)];
+		dphi.z = cell_phi[xyz] - cell_phi[AT(ix, iy, iz - 1)];
 	}
 	else {
-		dphi.z = 0.5 * (cell_phi[at(ix, iy, iz + 1)] - cell_phi[at(ix, iy, iz - 1)]);
+		dphi.z = 0.5 * (cell_phi[AT(ix, iy, iz + 1)] - cell_phi[AT(ix, iy, iz - 1)]);
 	}
 
     real coef = -1. / DX;
