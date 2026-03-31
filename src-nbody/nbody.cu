@@ -2,6 +2,7 @@
 //Parallel Nbody Code OpenMP-CUDA 4GPU
 
 #include <cstdlib>
+#include <cassert>
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -19,6 +20,7 @@
 
 #include "target_dir.h"
 #include "common.cuh"
+#include "parse.cuh"
 #include "nbody-kernel.cuh"
 #include "p2mesh-kernel.cuh"
 #include "wave-kernel.cuh"
@@ -94,7 +96,7 @@ auto check_particles_distribution(
 
 auto check_mass(
 	const std::vector<double>& cell_mass,
-	const std::vector<double2>& particles_mass,
+	const std::vector<double>& particles_mass,
 	double dx,
 	double domain_l,
 	int NX
@@ -120,10 +122,7 @@ auto check_mass(
 		<< std::accumulate(
 			particles_mass.begin(),
 			particles_mass.end(),
-			0.,
-			[](double sum, real2 v) {
-				return sum + v.x;
-			}
+			0.
 		)
 		<< std::endl;
 }
@@ -140,8 +139,8 @@ struct ConvertParticlesParams {
 
 auto convert_particles_to_grid(
 	const ConvertParticlesParams& params,
-	const CuDarray<real4>& particles_pos_,
-	const CuDarray<real2>& particles_mass_,
+	const CuDarray<real3>& particles_pos_,
+	const CuDarray<real>& particles_mass_,
 	CuDarray<ParticleCellInfo>& particles_cell_info_,
 	CuDarray<CellInfo>& cell_info_,
 	CuDarray<int>& cell_particles_count_,
@@ -184,8 +183,8 @@ auto convert_particles_to_grid(
 
 auto calc_acceleration_by_grid(
 	const ConvertParticlesParams& params,
-	const CuDarray<real4>& particles_pos_,
-	const CuDarray<real2>& particles_mass_,
+	const CuDarray<real3>& particles_pos_,
+	const CuDarray<real>& particles_mass_,
 	CuDarray<real3> particles_acc_,
 	CuDarray<real> particles_phi_,
 	CuDarray<real> cell_phi_prev_,
@@ -198,7 +197,7 @@ auto calc_acceleration_by_grid(
 	static CuDarray<int> cell_particles_count_(params.num_cells);
 	static CuDarray<int> particles_in_block_(params.num_blocks);
 	static CuDarray<real> cell_mass_(params.num_cells);
-	static CuDarray<real3> cell_uforce_(params.num_cells);
+	static CuDarray<real3> cell_acc_(params.num_cells);
 	static CuDarray<real> cell_phi_next_(params.num_cells);
 
 	static std::once_flag once_flag;
@@ -243,18 +242,16 @@ auto calc_acceleration_by_grid(
 	float time_wave_diss = timer.elapsedMilliseconds();
 
 	timer.start();
-	CuCall(uforce_field, params.over_cells, params.over_blocks) (
-		cell_uforce_,
+	CuCall(acc_field, params.over_cells, params.over_blocks) (
+		cell_acc_,
 		nullptr,
 		cell_phi_curr_,
-		cell_mass_,
 		wave_eq_data.nx_wave,
 		wave_eq_data.dx_wave
 	);
 	CuCall(apply_acceleration_to_particles, params.over_particles, params.over_blocks) (
 		particles_acc_,
-		cell_uforce_,
-		particles_mass_,
+		cell_acc_,
 		particles_cell_info_,
 		params.num_particles
 	);
@@ -291,8 +288,8 @@ auto calc_acceleration_by_grid(
 auto convert_particles(
 	const CuDarray<real>& particles_phi_,
 	const CuDarray<real3>& particles_acc_,
-	const CuDarray<real4>& particles_pos_,
-	const CuDarray<real2>& particles_mass_,
+	const CuDarray<real3>& particles_pos_,
+	const CuDarray<real>& particles_mass_,
 	int over_cells,
 	int over_blocks,
 	int over_particles,
@@ -313,7 +310,7 @@ auto convert_particles(
 	static CuDarray<int> cell_particles_count_(num_cells);
 	static CuDarray<int> particles_in_block_(num_cell_blocks);
 	static CuDarray<real> cell_mass_(num_cells);
-	static CuDarray<real3> cell_uforce_(num_cells);
+	static CuDarray<real3> cell_acc_(num_cells);
 	static CuDarray<real> cell_phi_next_(num_cells);
 	static CuDarray<real> cell_phi_curr_(num_cells);
 	static CuDarray<real> cell_phi_prev_(num_cells);
@@ -372,12 +369,11 @@ auto convert_particles(
 		swap(cell_phi_curr_, cell_phi_next_);
 	}
 
-	CuDarray<double> cell_uforce_abs_(num_cells);
-	CuCall(uforce_field, over_cells, over_blocks) (
-		cell_uforce_,
-		cell_uforce_abs_,
+	CuDarray<double> cell_acc_abs_(num_cells);
+	CuCall(acc_field, over_cells, over_blocks) (
+		cell_acc_,
+		cell_acc_abs_,
 		cell_phi_curr_,
-		cell_mass_,
 		NX,
 		dx
 	);
@@ -480,16 +476,16 @@ auto convert_particles(
 	// acceleration abs in cell
 	[
 		domain_l, dx, NX, IY, IZ,
-		&cell_uforce_abs_
+		&cell_acc_abs_
 	]
 	{
 		std::ofstream stream{ DEBUG_PATH / "acc_cell.txt" };
 		stream << "x, acc" << std::endl;
 
-		std::vector<double> cell_uforce_abs = cell_uforce_abs_.to_vector();
+		std::vector<double> cell_acc_abs = cell_acc_abs_.to_vector();
 		for (size_t i = 0; i < NX; ++i) {
 			double x = -domain_l + i * dx;
-			stream << std::format("{}, {:.7f}", x, cell_uforce_abs[at(i, IY, IZ)]) << std::endl;
+			stream << std::format("{}, {:.7f}", x, cell_acc_abs[at(i, IY, IZ)]) << std::endl;
 		}
 	}();
 
@@ -514,11 +510,10 @@ auto convert_particles(
 		);
 		CuDarray<real3> _cell_acc_from_particles(num_cells);
 		CuDarray<double> _cell_acc_abs_from_particles(num_cells);
-		CuCall(uforce_field, over_cells, over_blocks) (
+		CuCall(acc_field, over_cells, over_blocks) (
 			_cell_acc_from_particles,
 			_cell_acc_abs_from_particles,
 			_cell_phi_from_particles,
-			cell_mass_,
 			NX,
 			dx
 		);
@@ -568,7 +563,6 @@ auto convert_particles(
 	[
 		num_particles, over_particles, over_blocks, NX, num_cells,
 		domain_l, dx, IY, IZ,
-		&cell_uforce_abs_,
 		&particles_mass_
 	]
 	{
@@ -579,8 +573,7 @@ auto convert_particles(
 		CuDarray<real> _part_acc_abs(num_particles);
 		CuCall(apply_acceleration_to_particles, over_particles, over_blocks) (
 			_part_acc,
-			cell_uforce_,
-			particles_mass_,
+			cell_acc_,
 			particles_cell_info_,
 			num_particles
 		);
@@ -618,8 +611,7 @@ auto convert_particles(
 		CuDarray<real3> _cell_part_acc(num_particles);
 		CuCall(apply_acceleration_to_particles, over_particles, over_blocks) (
 			_cell_part_acc,
-			cell_uforce_,
-			particles_mass_,
+			cell_acc_,
 			particles_cell_info_,
 			num_particles
 		);
@@ -692,33 +684,52 @@ auto convert_particles(
 		std::ofstream stream{ DEBUG_PATH / "mpart.txt" };
 		stream << "i, acc" << std::endl;
 
-		std::vector<double2> mass = particles_mass_.to_vector();
+		std::vector<double> mass = particles_mass_.to_vector();
 
 		std::cout << "total mpart: "
 			<< std::accumulate(
 				mass.begin(),
 				mass.end(),
-				0.,
-				[](double sum, const double2& m) {
-					return sum + m.x;
-				}
+				0.
 			)
 			<< std::endl;
 
 		for (size_t i = 0; i < num_particles; ++i) {
-			stream << std::format("{}, {:.7f}", i, mass[i].x) << std::endl;
+			stream << std::format("{}, {:.7f}", i, mass[i]) << std::endl;
 		}
 	}();
 
 }
 
 //---Host Function----
+__host__ void print_cell_phi(
+	size_t iter,
+	const ConvertParticlesParams& params,
+	const CuDarray<real>& cell_phi_
+)
+{
+	static std::vector<double> cell_phi(params.num_cells, 0.);
+	cell_phi_.to_vector(cell_phi);
+
+	auto dir = OUT_PATH / "phi";
+	std::filesystem::create_directory(dir);
+	std::ofstream stream{ dir / std::format("phi_{:5}.csv", iter) };
+	stream << "x, phi" << std::endl;
+	int NX = params.nx;
+	int IY = NX / 2;
+	int IZ = NX / 2;
+	for (size_t i = 0; i < NX; ++i) {
+		double x = -wave_eq_data.sim_l + i * wave_eq_data.dx_wave;
+		stream << std::format("{}, {:.7f}", x, cell_phi[at(i, IY, IZ)]) << std::endl;
+	}
+}
+
 __host__ void print_particles_bin(
 	const char* name,
 	int i0,
 	int icount,
-	const std::vector<real4>& pos,
-	const std::vector<real4>& vel,
+	const std::vector<real3>& pos,
+	const std::vector<real3>& vel,
 	int it,
 	real t
 )
@@ -751,9 +762,9 @@ __host__ std::ios::openmode get_openmode(int it) {
 }
 
 __host__ void  result(
-	const std::vector<real4>& pos,
-	const std::vector<real4>& vel,
-	const std::vector<real2>& mass,
+	const std::vector<real3>& pos,
+	const std::vector<real3>& vel,
+	const std::vector<real>& mass,
 	int it,
 	real t,
 	const std::vector<real>& PSI,
@@ -805,14 +816,14 @@ __host__ void  result(
 			vfi = 0.0;
 		}
 
-		L.x += (vz*y - vy*z)*mass[i].x;
-		L.y += (vx*z - vz*x)*mass[i].x;
-		L.z += (vy*x - vx*y)*mass[i].x;
-		Imp.x += mass[i].x * vx;
-		Imp.y += mass[i].x * vy;
-		Imp.z += mass[i].x * vz;
-		Ek += mass[i].x * (vx * vx + vy * vy + vz * vz);
-		Ep += mass[i].x * PSI[i];
+		L.x += (vz*y - vy*z)*mass[i];
+		L.y += (vx*z - vz*x)*mass[i];
+		L.z += (vy*x - vx*y)*mass[i];
+		Imp.x += mass[i] * vx;
+		Imp.y += mass[i] * vy;
+		Imp.z += mass[i] * vz;
+		Ek += mass[i] * (vx * vx + vy * vy + vz * vz);
+		Ep += mass[i] * PSI[i];
 
 		Vr_max = max(Vr_max, abs(vr));
 		Vfi_max = max(Vfi_max, vfi);
@@ -972,89 +983,6 @@ __host__ auto read_start_info(const char* filename) {
 		dtsave
 	);
 }
-__host__ auto read_galaxies(const char* filename) {
-	int M_glx = 0;
-	int k_glx = 0;
-	int Ns = 0;
-	int Ndm = 0;
-	int NN = 0;
-
-	char temp[FILENAME_MAX];
-	FILE* outf = fopen(filename, "r");
-	fscanf(outf, "%d %[^\n]", &M_glx, temp);
-
-	auto N_s = new int[M_glx];
-	auto N_dm = new int[M_glx];
-	auto Mass_s = new double[M_glx];
-	auto Mass_dm = new double[M_glx];
-	auto mp_s = new double[M_glx];
-	auto mp_dm = new double[M_glx];
-	auto X_glx = new double[M_glx];
-	auto Y_glx = new double[M_glx];
-	auto Z_glx = new double[M_glx];
-	auto Vx_glx = new double[M_glx];
-	auto Vy_glx = new double[M_glx];
-	auto Vz_glx = new double[M_glx];
-	auto alpha_glx = new double[M_glx];
-	auto eps_s = new double[M_glx];
-	auto eps_dm = new double[M_glx];
-
-	for(int k = 0; k < M_glx; k++) {
-		fscanf(outf, "%d %[^\n]", &k_glx, temp);
-		fscanf(outf, "%d,%d %[^\n]", &N_s[k], &N_dm[k], temp);
-		fscanf(outf, "%lf,%lf %[^\n]", &Mass_s[k], &Mass_dm[k], temp);
-		fscanf(outf, "%lf,%lf %[^\n]", &eps_s[k], &eps_dm[k], temp);
-		fscanf(outf, "%lf %[^\n]", &alpha_glx[k], temp);
-		fscanf(outf, "%lf,%lf,%lf %[^\n]", &X_glx[k], &Y_glx[k], &Z_glx[k], temp);
-		fscanf(outf, "%lf,%lf,%lf %[^\n]", &Vx_glx[k], &Vy_glx[k], &Vz_glx[k], temp);
-		if (Mass_s[k] == 0.0 || N_s[k] == 0) {
-			Mass_s[k] = 0.0;
-			N_s[k] = 0;
-		}
-		if (Mass_dm[k] == 0.0 || N_dm[k] == 0) {
-			Mass_dm[k] = 0.0;
-			N_dm[k] = 0;
-		}
-
-		mp_s[k] = (N_s[k] > 0)
-			? Mass_s[k] / N_s[k]
-			: 0.0;
-		mp_dm[k] = (N_dm[k] > 0)
-			? Mass_dm[k] / N_dm[k]
-			: 0.0;
-
-		Ns += N_s[k];
-		Ndm += N_dm[k];
-		alpha_glx[k] *= DEG2RAD;
-	}
-
-	NN = Ns + Ndm;
-	printf("NN = %d, Ns = %d, Ndm = %d\n", NN, Ns, Ndm);
-	printf("mp_s[0] = %g, mp_dm[0] = %g \n", mp_s[0], mp_dm[0]);
-
-	fclose(outf);
-	return std::make_tuple(
-		M_glx,
-		Ns,
-		Ndm,
-		NN,
-		N_s,
-		N_dm,
-		Mass_s,
-		Mass_dm,
-		mp_s,
-		mp_dm,
-		X_glx,
-		Y_glx,
-		Z_glx,
-		Vx_glx,
-		Vy_glx,
-		Vz_glx,
-		alpha_glx,
-		eps_s,
-		eps_dm
-	);
-}
 
 void check_computing_units_info() {
 	// get threads count
@@ -1096,7 +1024,7 @@ void run() {
 	int i;
 
 	float gpuTime = 0.0; //
-	//-----Unitial State---------------------------------------------------------
+	//-----Initial State---------------------------------------------------------
 	real t = 0.0; // current time
 	real tmax = 0.0; // max simulation time
 	real tsave = 0.0;
@@ -1105,48 +1033,39 @@ void run() {
 	real Mh, a, Rh, Mb, b, Rb, eps2;
 	int i_cont = 0; // iteration to continue from
 	real K_m, K_r;
-	int Ns = 0; // total star particles
-	int Ndm = 0; // total dark matter particles
-	int NN = 0; // total particles
-	int *N_s, *N_dm; // particles count [galaxy num]
-	int M_glx = 0; // galaxies count
-	int k = 0; // galaxies iterator
-	// int k_glx = 0; // galaxy number
-	double *Mass_s, *Mass_dm; // mass [galaxy num]
-	double *eps_s, *eps_dm; // gravitational softening length [galaxy num]
-	double *mp_s, *mp_dm; // particles mass in the galaxy [galaxy num]
-	double *alpha_glx; // galaxy angle [galaxy num]
-	double *X_glx, *Y_glx, *Z_glx; // galaxy mass center [galaxy num]
-	double *Vx_glx, *Vy_glx, *Vz_glx; // galaxy mass center [galaxy num]
 
-	{
-		auto start_galaxies_path = INI_PATH / "__start_galaxies.ini";
-		auto start_galaxies_path_str = start_galaxies_path.string();
-		std::tie(
-			M_glx,
-			Ns,
-			Ndm,
-			NN,
-			N_s,
-			N_dm,
-			Mass_s,
-			Mass_dm,
-			mp_s,
-			mp_dm,
-			X_glx,
-			Y_glx,
-			Z_glx,
-			Vx_glx,
-			Vy_glx,
-			Vz_glx,
-			alpha_glx,
-			eps_s,
-			eps_dm
-		) = read_galaxies(start_galaxies_path_str.c_str());
-		printf("Ns / BLOCK_SIZE_b = %d\n", Ns / BLOCK_SIZE);
-		printf("Ndm / BLOCK_SIZE_b = %d\n", Ns / BLOCK_SIZE);
-		printf("NN / BLOCK_SIZE_b = %d\n", NN / BLOCK_SIZE);
+	auto galaxy_properties = read_galaxy_properties(INI_PATH / "__start_galaxies.ini");
+	if (galaxy_properties.empty()) {
+		throw std::runtime_error{ "No galaxy properties read" };
 	}
+
+	int N_star = std::accumulate(
+		galaxy_properties.begin(),
+		galaxy_properties.end(),
+		0,
+		[](int N, const GalaxyProperties& galaxy) {
+			return N + galaxy.n_star_particles;
+		}
+	);
+	int N_dark = std::accumulate(
+		galaxy_properties.begin(),
+		galaxy_properties.end(),
+		0,
+		[](int N, const GalaxyProperties& galaxy) {
+			return N + galaxy.n_dark_particles;
+		}
+	);
+	int N_total = N_star + N_dark;
+
+	std::cout << "galaxies count: " << galaxy_properties.size() << std::endl;
+
+	std::cout << "total particles: " << N_total << std::endl;
+	std::cout << "star particles: " << N_star << std::endl;
+	std::cout << "dark particles: " << N_dark << std::endl;
+
+	assert(false == galaxy_properties.empty());
+	std::cout << "mass of star particles: " << galaxy_properties.front().get_mass_star_particle();
+	std::cout << "mass of dark particles: " << galaxy_properties.front().get_mass_dark_particle();
 
 	{
 		auto start_nbody_path = INI_PATH / "__start_nbody.ini";
@@ -1207,7 +1126,9 @@ void run() {
 	printf("*****c_phi_h = %g \n", c_phi_h);
 	printf("*****c_phi_b = %g \n", c_phi_b);
 
-    constexpr int _nx = 200;
+	NBodySolver solver = NBodySolver::Nbody;
+
+    constexpr int _nx = 400;
     constexpr double _dx = 0.1;
     constexpr double _domain_l = 0.5 * _nx * _dx;
 	constexpr double _c_wave = 4574.337022617616;
@@ -1216,33 +1137,30 @@ void run() {
 	const double _diss_extra = 0.01;
 	const double _sim_l = _domain_l;
 	const double _bc_l = _domain_l / 10.;
-	const int _iterations_to_setup = 50;
+	const int _iterations_to_setup = 20000;
 	std::cout << "dt_wave: " << _dt_wave << std::endl;
 
-    real4 _domain_min{
+    real3 _domain_min{
         -_domain_l,
         -_domain_l,
-        -_domain_l,
-		0.
+        -_domain_l
     };
-    real4 _domain_max{
+    real3 _domain_max{
         _domain_l,
         _domain_l,
-        _domain_l,
-		0.
+        _domain_l
     };
-    real4 _cell_size{
+    real3 _cell_size{
         _dx,
         _dx,
-        _dx,
-		0.
+        _dx
     };
     int3 _grid_size{
         _nx,
         _nx,
         _nx
     };
-    int _num_particles = NN;
+    int _num_particles = N_total;
     int _num_cells = _nx * _nx * _nx;
     int _num_cell_blocks = (_num_cells + BLOCK_SIZE - 1) / BLOCK_SIZE;
     int _num_particle_blocks = (_num_particles + BLOCK_SIZE - 1) / BLOCK_SIZE;
@@ -1260,12 +1178,12 @@ void run() {
 
 	//-----Allocate Massiv Host-----------------------------
 	printf("allocate memory HOST\n");
-	std::vector<real4> pos_host(NN, make_real4(0., 0., 0., 0.));
-	std::vector<real4> vel_host(NN, make_real4(0., 0., 0., 0.));
-	std::vector<real2> mass_host(NN, make_real2(0., 0.));
-	std::vector<real> eps2_host(NN, 0.);
-	std::vector<real> phi_host(NN, 0.);
-	std::vector<real3> acc_host(NN, make_real3(0., 0., 0.));
+	std::vector<real3> pos_host(N_total, make_real3(0., 0., 0.));
+	std::vector<real3> vel_host(N_total, make_real3(0., 0., 0.));
+	std::vector<real> mass_host(N_total, 0.);
+	std::vector<real> eps2_host(N_total, 0.);
+	std::vector<real> phi_host(N_total, 0.);
+	std::vector<real3> acc_host(N_total, make_real3(0., 0., 0.));
 
 	std::vector<real> cell_mass_host(_num_cells, 0.);
 	std::vector<real> cell_phi_host(_num_cells,  0.);
@@ -1281,8 +1199,8 @@ void run() {
 	convert_particles_params.over_cells = _over_cells;
 	convert_particles_params.over_particles = _over_particles;
 
-	d.Ns = Ns;
-	d.NN = NN;
+	d.Ns = N_star;
+	d.NN = N_total;
 	d.Mh = Mh;
 	d.Mh_inf = Mh_inf;
 	d.a = a;
@@ -1500,13 +1418,13 @@ void run() {
 	//-----Allocate Massiv GPU--------------------------------------
 
 	printf("allocate memory GPU %d\n", i);
-	CuDarray<real4> pos_(pos_host);
-	CuDarray<real4> vel_(vel_host);
-	CuDarray<real2> mass_(mass_host);
+	CuDarray<real3> pos_(pos_host);
+	CuDarray<real3> vel_(vel_host);
+	CuDarray<real> mass_(mass_host);
 	CuDarray<real> eps2_(eps2_host);
 	CuDarray<real> phi_(phi_host);
-	CuDarray<real4> post_(_num_particles);
-	CuDarray<real4> velt_(_num_particles);
+	CuDarray<real3> post_(_num_particles);
+	CuDarray<real3> velt_(_num_particles);
 	CuDarray<real3> acc_(_num_particles);
 	CuDarray<real3> acct_(_num_particles);
 
@@ -1518,38 +1436,46 @@ void run() {
 
 	//------Расчет грав. сил-----------------------------------------------------
 	printf("calc grav forces\n");
-	// {
-	// 	CuCall(PSI_kernel, NN / BLOCK_SIZE, BLOCK_SIZE) (
-	// 		phi_,
-	// 		pos_,
-	// 		pos_,
-	// 		mass_,
-	// 		eps2_
-	// 	);
-	// 	CuCall(ACCEL, NN / BLOCK_SIZE, BLOCK_SIZE) (
-	// 		acc_,
-	// 		pos_,
-	// 		pos_,
-	// 		mass_,
-	// 		eps2_
-	// 	);
-	// }
 
-	std::tie(
-		acc_,
-		phi_,
-		cell_phi_prev_,
-		cell_phi_curr_
-	) = calc_acceleration_by_grid(
-		convert_particles_params,
-		pos_,
-		mass_,
-		std::move(acc_),
-		std::move(phi_),
-		std::move(cell_phi_prev_),
-		std::move(cell_phi_curr_),
-		_iterations_to_setup
-	);
+	CuTimer timer_setup;
+	timer_setup.start();
+	if (solver == NBodySolver::Wave) {
+		std::tie(
+			acc_,
+			phi_,
+			cell_phi_prev_,
+			cell_phi_curr_
+		) = calc_acceleration_by_grid(
+			convert_particles_params,
+			pos_,
+			mass_,
+			std::move(acc_),
+			std::move(phi_),
+			std::move(cell_phi_prev_),
+			std::move(cell_phi_curr_),
+			_iterations_to_setup
+		);
+		print_cell_phi(0, convert_particles_params, cell_phi_curr_);
+	}
+	else {
+		CuCall(PHI_kernel, N_total / BLOCK_SIZE, BLOCK_SIZE) (
+			phi_,
+			pos_,
+			pos_,
+			mass_,
+			eps2_
+		);
+		CuCall(ACCEL, N_total / BLOCK_SIZE, BLOCK_SIZE) (
+			acc_,
+			pos_,
+			pos_,
+			mass_,
+			eps2_
+		);
+
+	}
+	timer_setup.stop();
+	std::cout << "time for setup: " << timer_setup.elapsedSeconds() << " seconds " << std::endl;
 
 	// convert_particles(
 	// 	phi_,
@@ -1602,23 +1528,36 @@ void run() {
 
 		//------Расчет самогравитации Nbody частиц-----------------------------------------------------
 		printf("Nbody grav %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
-		std::cout << "Wave eq iterations: " << (int)(dtgrav / _dt_wave) << std::endl;
-		acct_.set_zero();
-		std::tie(
-			acct_,
-			phi_,
-			cell_phi_prev_,
-			cell_phi_curr_
-		) = calc_acceleration_by_grid(
-			convert_particles_params,
-			post_,
-			mass_,
-			std::move(acct_),
-			std::move(phi_),
-			std::move(cell_phi_prev_),
-			std::move(cell_phi_curr_),
-			dtgrav / _dt_wave
-		);
+
+		if (solver == NBodySolver::Wave) {
+			std::cout << "Wave eq iterations: " << (int)(dtgrav / _dt_wave) << std::endl;
+			acct_.set_zero();
+			std::tie(
+				acct_,
+				phi_,
+				cell_phi_prev_,
+				cell_phi_curr_
+			) = calc_acceleration_by_grid(
+				convert_particles_params,
+				post_,
+				mass_,
+				std::move(acct_),
+				std::move(phi_),
+				std::move(cell_phi_prev_),
+				std::move(cell_phi_curr_),
+				dtgrav / _dt_wave
+			);
+		}
+		else {
+			CuCall(ACCEL, N_total / BLOCK_SIZE, BLOCK_SIZE) (
+				acct_,
+				post_,
+				post_,
+				mass_,
+				eps2_
+			);
+		}
+
 
 		//------Nbody corrector (tn+dtgrav)----------------------------------------------------------------------------
 		printf("Nbody corrector %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
@@ -1652,14 +1591,39 @@ void run() {
 			//Copy data GPU to CPU
 			printf("Copy data GPU to CPU: redo PSI_kernel\n");
 
-			// phi_.set_zero();
-			// CuCall(PSI_kernel, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
-			// 	phi_,
-			// 	pos_,
-			// 	pos_,
-			// 	mass_,
-			// 	eps2_
-			// );
+			phi_.set_zero();
+			CuCall(PHI_kernel, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
+				phi_,
+				pos_,
+				pos_,
+				mass_,
+				eps2_
+			);
+			{
+				static CuDarray<ParticleCellInfo> particles_cell_info_(_num_particles);
+				static CuDarray<CellInfo> cell_info_(_num_cells);
+				static CuDarray<int> cell_particles_count_(_num_cells);
+				static CuDarray<int> particles_in_block_(_num_cell_blocks);
+				static CuDarray<real> cell_mass_(_num_cells);
+
+				convert_particles_to_grid(
+					convert_particles_params,
+					pos_,
+					mass_,
+					particles_cell_info_,
+					cell_info_,
+					cell_particles_count_,
+					particles_in_block_,
+					cell_mass_
+				);
+				CuCall(computeCellPhiUnsorted, _over_particles, _over_blocks) (
+					phi_,
+					particles_cell_info_,
+					cell_info_,
+					cell_phi_curr_,
+					_num_particles
+				);
+			}
 
 			printf("Copy data GPU to CPU\n");
 			pos_.to_vector(pos_host);
@@ -1689,6 +1653,8 @@ void run() {
 				dtgrav
 			);
 
+			print_cell_phi(itt * it, convert_particles_params, cell_phi_curr_);
+
 			// print sample particle:
 			{
 				std::fstream::openmode openmode = it == 1
@@ -1698,7 +1664,7 @@ void run() {
 				std::ofstream stream_sample{ OUT_PATH / "sample.csv", openmode };
 
 				if (1 == it) {
-					stream_sample << "it, t, i, r, fi, z, acc, phi, rho, e, h, Vr, Vfi, Vz" << std::endl;
+					stream_sample << "it, t, i, r, fi, z, acc, phi, ax, ay, az" << std::endl;
 				}
 
 				int i = 1;
@@ -1716,40 +1682,10 @@ void run() {
 					<< fi << ", "
 					<< pos_host[i].z << ", "
 					<< acc_abs << ", "
-					<< phi_host[i] << ", "   // phi
-					<< pos_host[i].w << ", " // rho
-					<< vel_host[i].w << ", " // e
-					<< mass_host[i].y << ", " // h
-					<< vr << ", "
-					<< vfi << ", "
-					<< vel_host[i].z << std::endl;
-
-
-				std::string str_1 = std::format(
-					"i={0} :: rho[{0}] = {1}, e[{0}] = {2}, h[{0}] = {3}",
-					i,
-					pos_host[i].w,
-					vel_host[i].w,
-					mass_host[i].y
-				);
-				std::string str_2 = std::format(
-					"Vr[{0}] = {1}, Vfi[{0}] = {2}, Vz[{0}] = {3}",
-					i,
-					vr,
-					vfi,
-					vel_host[i].z
-				);
-				std::string str_3 = std::format(
-					"r[{0}] = {1}, fi[{0}] = {2}, z[{0}] = {3}",
-					i,
-					r,
-					fi,
-					pos_host[i].z
-				);
-
-				std::cout << str_1 << std::endl;
-				std::cout << str_2 << std::endl;
-				std::cout << str_3 << std::endl;
+					<< phi_host[i] << ", "
+					<< acc_host[i].x << ", "
+					<< acc_host[i].y << ", "
+					<< acc_host[i].z << std::endl;
 			}
 
 

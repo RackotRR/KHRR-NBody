@@ -9,7 +9,7 @@
 // ЯДРО 2: ИНИЦИАЛИЗАЦИЯ ВСПОМОГАТЕЛЬНЫХ МАССИВОВ
 // ====================================================
 __global__ void assignParticlesToCells(
-	const real4* particles_pos, // [N] исходные частицы
+	const real3* particles_pos, // [N] исходные частицы
     ParticleCellInfo* particles_cell_info, // [N] инфо: x=ячейка, y=индекс в ячейке
     CellInfo* cellInfo,          // [TOTAL_CELLS] для подсчёта частиц
     int* cellParticleCount, // [TOTAL_CELLS] счётчик для atomicAdd
@@ -19,7 +19,7 @@ __global__ void assignParticlesToCells(
     int i_part = threadIdx.x + blockIdx.x * blockDim.x;
     if (i_part >= numParticles) return;
 
-    real4 p = particles_pos[i_part];
+    real3 p = particles_pos[i_part];
 
     // Вычисление индексов ячейки
     int ix = clamp(
@@ -124,7 +124,7 @@ __global__ void adjustGlobalPrefixSums(
 
 // ====================================================
 __global__ void computeCellMassesUnsorted(
-    const real2* particle_mass,   	   // [N] упорядоченные частицы
+    const real* particle_mass,   	   // [N] упорядоченные частицы
     ParticleCellInfo* particles_cell_info,// [N] инфо: x=ячейка, y=индекс в ячейке
     double* cellMasses,                // [TOTAL_CELLS] результат
     const int numParticles)
@@ -133,7 +133,7 @@ __global__ void computeCellMassesUnsorted(
     if (i_particle >= numParticles) return;
 
     int i_cell = particles_cell_info[i_particle].cell_id;
-	atomicAdd(&cellMasses[i_cell], particle_mass[i_particle].x);
+	atomicAdd(&cellMasses[i_cell], particle_mass[i_particle]);
 }
 
 // ====================================================
@@ -166,11 +166,10 @@ __global__ void computeCellPhiUnsorted(
 	// }
 }
 
-__global__ void uforce_field(
-	real3* cell_uforce, // сила на единицу массы
-	real*  cell_uforce_abs,  // сила на единицу массы
+__global__ void acc_field(
+	real3* cell_acc, // сила на единицу массы
+	real*  cell_acc_abs,  // сила на единицу массы
 	const real* cell_phi,
-	const real* cell_mass,
 	const int NX,
 	const double DX
 )
@@ -218,17 +217,16 @@ __global__ void uforce_field(
 	dphi.y *= coef;
 	dphi.z *= coef;
 
-	cell_uforce[xyz] = dphi;
+	cell_acc[xyz] = dphi;
 
-    if (cell_uforce_abs) {
-        cell_uforce_abs[xyz] = norm3(dphi);
+    if (cell_acc_abs) {
+        cell_acc_abs[xyz] = norm3(dphi);
     }
 }
 
 __global__ void apply_acceleration_to_particles(
 	real3* particle_acceleration,
-	const real3* cell_uforce,
-    const real2* particles_mass,
+	const real3* cell_acc,
     ParticleCellInfo* particles_cell_info,
     const int numParticles
 )
@@ -237,9 +235,9 @@ __global__ void apply_acceleration_to_particles(
     if (i_particle >= numParticles) return;
 
     int i_cell = particles_cell_info[i_particle].cell_id;
-	particle_acceleration[i_particle].x = cell_uforce[i_cell].x;// * particles_mass[i_particle].x;
-	particle_acceleration[i_particle].y = cell_uforce[i_cell].y;// * particles_mass[i_particle].x;
-	particle_acceleration[i_particle].z = cell_uforce[i_cell].z;// * particles_mass[i_particle].x;
+	particle_acceleration[i_particle].x = cell_acc[i_cell].x;
+	particle_acceleration[i_particle].y = cell_acc[i_cell].y;
+	particle_acceleration[i_particle].z = cell_acc[i_cell].z;
 }
 __global__ void apply_cell_to_particles(
 	real* particle_value,
@@ -275,7 +273,7 @@ __global__ void apply_cell_to_particles_avg(
 __global__ void apply_particle_to_cell_weighted(
     double* cell_value,
     const real* cell_mass,
-    const real2* particle_mass,
+    const real* particle_mass,
     const real* particle_value,
     const ParticleCellInfo* particles_cell_info,
     const int numParticles)
@@ -284,7 +282,7 @@ __global__ void apply_particle_to_cell_weighted(
     if (i_particle >= numParticles) return;
 
     int i_cell = particles_cell_info[i_particle].cell_id;
-    real weight = particle_mass[i_particle].x / cell_mass[i_cell];
+    real weight = particle_mass[i_particle] / cell_mass[i_cell];
 	atomicAdd(&cell_value[i_cell], particle_value[i_particle] * weight);
 }
 

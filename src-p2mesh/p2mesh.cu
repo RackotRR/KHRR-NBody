@@ -18,9 +18,7 @@
 #define real double
 #define real2 double2
 #define real3 double3
-#define real4 double4_32a
 #define make_real3 make_double3
-#define make_real4 make_double4_32a
 #define make_real2 make_double2
 
 struct CellInfo{
@@ -146,7 +144,7 @@ __global__ void initSortingArrays(
 // ЯДРО 2: ИНИЦИАЛИЗАЦИЯ ВСПОМОГАТЕЛЬНЫХ МАССИВОВ
 // ====================================================
 __global__ void assignParticlesToCells(
-	const real4* particles_pos, // [N] исходные частицы
+	const real3* particles_pos, // [N] исходные частицы
     ParticleCellInfo* particleCellInfo, // [N] инфо: x=ячейка, y=индекс в ячейке
     CellInfo* cellInfo,          // [TOTAL_CELLS] для подсчёта частиц
     int* cellParticleCount, // [TOTAL_CELLS] счётчик для atomicAdd
@@ -156,7 +154,7 @@ __global__ void assignParticlesToCells(
     int i_part = threadIdx.x + blockIdx.x * blockDim.x;
     if (i_part >= numParticles) return;
 
-    real4 p = particles_pos[i_part];
+    real3 p = particles_pos[i_part];
 
     // Вычисление индексов ячейки
     int ix = clamp((int)((p.x - dd.domainMin.x) / dd.cellSize.x), 0, (int)(dd.gridSize.x - 1));
@@ -285,7 +283,7 @@ int main(int argc, char * argv[]) {
     int over_blocks = block_size;
 
     using namespace RR::CUDA;
-    auto particles_pos_ = CuDarray<real4>(num_particles);
+    auto particles_pos_ = CuDarray<real3>(num_particles);
     auto particles_cell_info_ = CuDarray<ParticleCellInfo>(num_particles);
     auto cell_mass_ = CuDarray<real>(num_cells);
     auto cell_info_ = CuDarray<CellInfo>(num_cells);

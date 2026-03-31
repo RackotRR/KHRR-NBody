@@ -53,9 +53,9 @@ struct DataBlock{
 };
 
 struct WaveEqData {
-    real4 domainMin;
-    real4 domainMax;
-    real4 cellSize;
+    real3 domainMin;
+    real3 domainMax;
+    real3 cellSize;
     int3 gridSize;
 
 	int nx_wave;
@@ -74,33 +74,27 @@ __constant__ WaveEqData wave_eq_data_;
 
 #define at(x, y, z) ((x) + (y) * (NX) + (z) * (NX) * (NX))
 
-__host__ __device__ real dot2(const real2& vec1, const real2& vec2) {
+inline __host__ __device__ real dot2(const real2& vec1, const real2& vec2) {
 	return
 		vec1.x * vec2.x +
 		vec1.y * vec2.y;
 }
-__host__ __device__ real dot3(const real3& vec1, const real3& vec2) {
+inline __host__ __device__ real dot3(const real3& vec1, const real3& vec2) {
 	return
 		vec1.x * vec2.x +
 		vec1.y * vec2.y +
 		vec1.z * vec2.z;
 }
-__host__ __device__ real dot4(const real4& vec1, const real4& vec2) {
-	return
-		vec1.x * vec2.x +
-		vec1.y * vec2.y +
-		vec1.z * vec2.z +
-		vec1.w * vec2.w;
-}
 
-__host__ __device__ real norm2(const real2& vec) {
+inline __host__ __device__ real norm2(const real2& vec) {
 	return sqrt(dot2(vec, vec));
 }
-__host__ __device__ real norm3(const real3& vec) {
+inline __host__ __device__ real norm3(const real3& vec) {
 	return sqrt(dot3(vec, vec));
 }
-__host__ __device__ real norm4(const real4& vec) {
-	return sqrt(dot4(vec, vec));
+
+inline __host__ __device__ real cube(real x) {
+	return x * x * x;
 }
 
 template<typename T>
