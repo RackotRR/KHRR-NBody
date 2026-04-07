@@ -1465,14 +1465,17 @@ void run() {
 		print_cell_phi(0, convert_particles_params, cell_phi_curr_);
 	}
 	else {
-		CuCall(PHI_kernel, N_total / BLOCK_SIZE, BLOCK_SIZE) (
+		phi_.set_zero();
+		CuCall(PHI_kernel, _num_particle_blocks, BLOCK_SIZE) (
 			phi_,
 			pos_,
 			pos_,
 			mass_,
 			eps2_
 		);
-		CuCall(ACCEL_kernel, N_total / BLOCK_SIZE, BLOCK_SIZE) (
+
+		acc_.set_zero();
+		CuCall(ACCEL_kernel, _num_particle_blocks, BLOCK_SIZE) (
 			acc_,
 			pos_,
 			pos_,
@@ -1482,6 +1485,8 @@ void run() {
 		phi_.to_vector(phi_host);
 		acc_.to_vector(acc_host);
 	}
+
+
 	timer_setup.stop();
 	std::cout << "time for setup: " << timer_setup.elapsedSeconds() << " seconds " << std::endl;
 
@@ -1522,7 +1527,7 @@ void run() {
 
 		//------Nbody predictor (tn+dtgrav)----------------------------------------------------------------------------
 		printf("Nbody predictor %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
-		CuCall(kernelNbody_integTime, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
+		CuCall(kernelNbody_integTime, _num_particle_blocks, BLOCK_SIZE) (
 			acc_,
 			post_,
 			velt_,
@@ -1537,9 +1542,9 @@ void run() {
 		//------Расчет самогравитации Nbody частиц-----------------------------------------------------
 		printf("Nbody grav %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
 
+		acct_.set_zero();
 		if (solver == NBodySolver::Wave) {
 			std::cout << "Wave eq iterations: " << (int)(dtgrav / _dt_wave) << std::endl;
-			acct_.set_zero();
 			std::tie(
 				acct_,
 				phi_,
@@ -1557,7 +1562,7 @@ void run() {
 			);
 		}
 		else {
-			CuCall(ACCEL_kernel, N_total / BLOCK_SIZE, BLOCK_SIZE) (
+			CuCall(ACCEL_kernel, _num_particle_blocks, BLOCK_SIZE) (
 				acct_,
 				post_,
 				post_,
@@ -1566,10 +1571,9 @@ void run() {
 			);
 		}
 
-
 		//------Nbody corrector (tn+dtgrav)----------------------------------------------------------------------------
 		printf("Nbody corrector %d-%d/%d (%lf - %lf / %lf)\n", it, itt, is_grav, t, tgrav, tsave);
-		CuCall(kernelNbody_integTime, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
+		CuCall(kernelNbody_integTime, _num_particle_blocks, BLOCK_SIZE) (
 			acct_,
 			pos_,
 			vel_,
@@ -1580,7 +1584,6 @@ void run() {
 			tgrav,
 			acc_
 		);
-
 
 		timer_base_cycle.stop();
 		float time_base_cycle_sec = timer_base_cycle.elapsedSeconds();
@@ -1601,7 +1604,7 @@ void run() {
 			if (solver == NBodySolver::Nbody) {
 				printf("Copy data GPU to CPU: redo PSI_kernel\n");
 				phi_.set_zero();
-				CuCall(PHI_kernel, _num_particles / BLOCK_SIZE, BLOCK_SIZE) (
+				CuCall(PHI_kernel, _num_particle_blocks, BLOCK_SIZE) (
 					phi_,
 					pos_,
 					pos_,

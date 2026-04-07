@@ -51,21 +51,35 @@ __global__ void PHI_kernel(
 	__shared__ real3 pos_other[BLOCK_SIZE];
 	__shared__ real mass_other[BLOCK_SIZE];
 	__shared__ real eps2_other[BLOCK_SIZE];
+	cuda::std::memset(pos_other, 0, sizeof(real3) * BLOCK_SIZE);
+	cuda::std::memset(mass_other, 0, sizeof(real) * BLOCK_SIZE);
+	cuda::std::memset(eps2_other, 0, sizeof(real) * BLOCK_SIZE);
 
-	int i_curr_global = threadIdx.x + blockIdx.x * blockDim.x;
-	real3 p_curr = pos_i[i_curr_global];
-	real eps2_curr = eps2_j[i_curr_global];
 	real phi_sum = 0.;
+	int i_curr_global = threadIdx.x + blockIdx.x * blockDim.x;
+
+	real3 p_curr;
+	real eps2_curr;
+	if (i_curr_global < dd.NN) {
+		p_curr = pos_i[i_curr_global];
+		eps2_curr = eps2_j[i_curr_global];
+	}
+	else {
+		p_curr = make_real3(0., 0., 0.);
+		eps2_curr = 0.;
+	}
 
 	for (int block = 0; block < gridDim.x; ++block) {
-		int i_other_global = threadIdx.x + block * BLOCK_SIZE;
-		pos_other[threadIdx.x] = pos_j[i_other_global];
-		mass_other[threadIdx.x] = mass_j[i_other_global];
-		eps2_other[threadIdx.x] = eps2_j[i_other_global];
+		int i_other_global = threadIdx.x + block * blockDim.x;
+		if (i_other_global < dd.NN) {
+			pos_other[threadIdx.x] = pos_j[i_other_global];
+			mass_other[threadIdx.x] = mass_j[i_other_global];
+			eps2_other[threadIdx.x] = eps2_j[i_other_global];
+		}
 
 		__syncthreads();
 
-		for (int i_other_local = 0; i_other_local < BLOCK_SIZE; ++i_other_local) {
+		for (int i_other_local = 0; i_other_local < blockDim.x; ++i_other_local) {
 			real3 dp = make_real3(
 				pos_other[i_other_local].x - p_curr.x,
 				pos_other[i_other_local].y - p_curr.y,
@@ -82,7 +96,14 @@ __global__ void PHI_kernel(
 
 	}
 
-	phi[i_curr_global] -= phi_sum;
+	if (i_curr_global < dd.NN) {
+		// fix self-gravity
+		double mass_curr = i_curr_global < dd.NN
+			? mass_j[i_curr_global]
+			: 0.;
+		double self_grav = mass_curr / sqrt(eps2_curr);
+		phi[i_curr_global] -= phi_sum - self_grav;
+	}
 }
 
 //-----Force_Nbody kernel--------
@@ -97,20 +118,31 @@ __global__ void ACCEL_kernel(
 	__shared__ real3 pos_other[BLOCK_SIZE];
 	__shared__ real mass_other[BLOCK_SIZE];
 	__shared__ real eps2_other[BLOCK_SIZE];
+	cuda::std::memset(pos_other, 0, sizeof(real3) * BLOCK_SIZE);
+	cuda::std::memset(mass_other, 0, sizeof(real) * BLOCK_SIZE);
+	cuda::std::memset(eps2_other, 0, sizeof(real) * BLOCK_SIZE);
 
+	real3 f_sum = make_real3(0.0, 0.0, 0.0);
 	int i_curr_global = threadIdx.x + blockIdx.x * blockDim.x;
 
-	if (i_curr_global >= dd.NN) return;
-
-	real3 p_curr = pos_i[i_curr_global];
-	real eps2_curr = eps2_j[i_curr_global];
-	real3 f_sum = make_real3(0.0, 0.0, 0.0);
+	real3 p_curr;
+	real eps2_curr;
+	if (i_curr_global < dd.NN) {
+		p_curr = pos_i[i_curr_global];
+		eps2_curr = eps2_j[i_curr_global];
+	}
+	else {
+		p_curr = make_real3(0., 0., 0.);
+		eps2_curr = 0.;
+	}
 
 	for (int block = 0; block < gridDim.x; block++) {
 		int i_other_global = threadIdx.x + block * blockDim.x;
-		pos_other[threadIdx.x] = pos_j[i_other_global];
-		mass_other[threadIdx.x] = mass_j[i_other_global];
-		eps2_other[threadIdx.x] = eps2_j[i_other_global];
+		if (i_other_global < dd.NN) {
+			pos_other[threadIdx.x] = pos_j[i_other_global];
+			mass_other[threadIdx.x] = mass_j[i_other_global];
+			eps2_other[threadIdx.x] = eps2_j[i_other_global];
+		}
 
 		__syncthreads();
 
@@ -134,11 +166,13 @@ __global__ void ACCEL_kernel(
 
 	}
 
-	acc[i_curr_global] = make_real3(
-		acc[i_curr_global].x + f_sum.x,
-		acc[i_curr_global].y + f_sum.y,
-		acc[i_curr_global].z + f_sum.z
-	);
+	if (i_curr_global < dd.NN) {
+		acc[i_curr_global] = make_real3(
+			acc[i_curr_global].x + f_sum.x,
+			acc[i_curr_global].y + f_sum.y,
+			acc[i_curr_global].z + f_sum.z
+		);
+	}
 }
 
 __global__ void kernelNbody_integTime(
@@ -154,6 +188,10 @@ __global__ void kernelNbody_integTime(
 )
 {
 	int i = threadIdx.x + blockIdx.x * blockDim.x;
+	if (i >= dd.NN) {
+		return;
+	}
+
 	real3 v = vel[i];
 	real3 r = pos[i];
 	real3 vt;
