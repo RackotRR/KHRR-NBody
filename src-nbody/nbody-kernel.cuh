@@ -39,8 +39,54 @@ __device__ real3 dev_fex(real3 p, real t){
 	return f;
 }
 
+//-----Phi_Nbody kernel--------
+__global__ void PHI_kernel(
+	real* phi,
+	const real3* pos_i,
+	const real3* pos_j,
+	const real* mass_j,
+	const real* eps2_j
+)
+{
+	__shared__ real3 pos_other[BLOCK_SIZE];
+	__shared__ real mass_other[BLOCK_SIZE];
+	__shared__ real eps2_other[BLOCK_SIZE];
+
+	int i_curr_global = threadIdx.x + blockIdx.x * blockDim.x;
+	real3 p_curr = pos_i[i_curr_global];
+	real eps2_curr = eps2_j[i_curr_global];
+	real phi_sum = 0.;
+
+	for (int block = 0; block < gridDim.x; ++block) {
+		int i_other_global = threadIdx.x + block * BLOCK_SIZE;
+		pos_other[threadIdx.x] = pos_j[i_other_global];
+		mass_other[threadIdx.x] = mass_j[i_other_global];
+		eps2_other[threadIdx.x] = eps2_j[i_other_global];
+
+		__syncthreads();
+
+		for (int i_other_local = 0; i_other_local < BLOCK_SIZE; ++i_other_local) {
+			real3 dp = make_real3(
+				pos_other[i_other_local].x - p_curr.x,
+				pos_other[i_other_local].y - p_curr.y,
+				pos_other[i_other_local].z - p_curr.z
+			);
+
+			phi_sum += mass_other[i_other_local] / sqrt(
+				dot3(dp, dp) +
+				0.5 * (eps2_curr + eps2_other[i_other_local])
+			);
+		}
+
+		__syncthreads();
+
+	}
+
+	phi[i_curr_global] -= phi_sum;
+}
+
 //-----Force_Nbody kernel--------
-__global__ void ACCEL(
+__global__ void ACCEL_kernel(
 	real3* acc,   // f_ij
 	const real3* pos_i, // r_i
 	const real3* pos_j, // r_j
@@ -90,52 +136,6 @@ __global__ void ACCEL(
 		acc[i_curr_global].y + f_sum.y,
 		acc[i_curr_global].z + f_sum.z
 	);
-}
-
-//-----Phi_Nbody kernel--------
-__global__ void PHI_kernel(
-	real* phi,
-	const real3* pos_i,
-	const real3* pos_j,
-	const real* mass_j,
-	const real* eps2_j
-)
-{
-	__shared__ real3 pos_other[BLOCK_SIZE];
-	__shared__ real mass_other[BLOCK_SIZE];
-	__shared__ real eps2_other[BLOCK_SIZE];
-
-	int i_curr_global = threadIdx.x + blockIdx.x * blockDim.x;
-	real3 p_curr = pos_i[i_curr_global];
-	real eps2_curr = eps2_j[i_curr_global];
-	real phi_sum = 0.;
-
-	for (int block = 0; block < gridDim.x; ++block) {
-		int i_other_global = threadIdx.x + block * BLOCK_SIZE;
-		pos_other[threadIdx.x] = pos_j[i_other_global];
-		mass_other[threadIdx.x] = mass_j[i_other_global];
-		eps2_other[threadIdx.x] = eps2_j[i_other_global];
-
-		__syncthreads();
-
-		for (int i_other_local = 0; i_other_local < BLOCK_SIZE; ++i_other_local) {
-			real3 dp = make_real3(
-				pos_other[i_other_local].x - p_curr.x,
-				pos_other[i_other_local].y - p_curr.y,
-				pos_other[i_other_local].z - p_curr.z
-			);
-
-			phi_sum += mass_other[i_other_local] / sqrt(
-				dot3(dp, dp) +
-				0.5 * (eps2_curr + eps2_other[i_other_local])
-			);
-		}
-
-		__syncthreads();
-
-	}
-
-	phi[i_curr_global] -= phi_sum;
 }
 
 __global__ void kernelNbody_integTime(

@@ -2,8 +2,8 @@
 #include <filesystem>
 
 namespace fs = std::filesystem;
-const auto BASE_PATH = fs::path{ "@CMAKE_SOURCE_DIR@" }.make_preferred() / "data" / "nbody";
-const auto BIN_PATH = BASE_PATH / "bin";
-const auto OUT_PATH = BASE_PATH / "out";
-const auto INI_PATH = BASE_PATH / "ini";
-const auto DEBUG_PATH = BASE_PATH / "debug";
+inline const auto BASE_PATH = fs::path{ "@CMAKE_SOURCE_DIR@" }.make_preferred() / "data" / "nbody";
+inline const auto BIN_PATH = BASE_PATH / "bin";
+inline const auto OUT_PATH = BASE_PATH / "out";
+inline const auto INI_PATH = BASE_PATH / "ini";
+inline const auto DEBUG_PATH = BASE_PATH / "debug";

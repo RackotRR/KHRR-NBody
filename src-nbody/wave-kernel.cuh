@@ -41,30 +41,30 @@ __global__ void wave_diss_iteration(
 #define _DISS_FUNC(x) (DISS_EXTRA * (x) * (x))
 
     if (x > -(SIM_L - BC_L)) {
-        const double right = SIM_L - BC_L;
-        diss += _DISS_FUNC(fabs(x - right));
+        const double x_right = SIM_L - BC_L;
+        diss += _DISS_FUNC(fabs(x - x_right));
     }
     else if (x < -(SIM_L - BC_L)) {
-        const double left = -(SIM_L - BC_L);
-        diss += _DISS_FUNC(fabs(x - left));
+        const double x_left = -(SIM_L - BC_L);
+        diss += _DISS_FUNC(fabs(x - x_left));
     }
 
     if (y > (SIM_L - BC_L)) {
-        const double top = SIM_L - BC_L;
-        diss += _DISS_FUNC(fabs(y - top));
+        const double y_top = SIM_L - BC_L;
+        diss += _DISS_FUNC(fabs(y - y_top));
     }
     else if (y < -(SIM_L - BC_L)) {
-        const double bottom = -(SIM_L - BC_L);
-        diss += _DISS_FUNC(fabs(y - bottom));
+        const double y_bottom = -(SIM_L - BC_L);
+        diss += _DISS_FUNC(fabs(y - y_bottom));
     }
 
     if (z > (SIM_L - BC_L)) {
-        const double far = SIM_L - BC_L;
-        diss += _DISS_FUNC(fabs(z - far));
+        const double z_far = SIM_L - BC_L;
+        diss += _DISS_FUNC(fabs(z - z_far));
     }
     else if (z < -(SIM_L - BC_L)) {
-        const double near = -(SIM_L - BC_L);
-        diss += _DISS_FUNC(fabs(z - near));
+        const double z_near = -(SIM_L - BC_L);
+        diss += _DISS_FUNC(fabs(z - z_near));
     }
 
 

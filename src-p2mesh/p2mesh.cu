@@ -4,7 +4,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
-#include <RR/RRCU.cuh>
+#include <RR/CUDA/CuCommon.cuh>
 
 #include <filesystem>
 #include <fstream>

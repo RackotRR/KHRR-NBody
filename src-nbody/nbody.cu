@@ -10,7 +10,7 @@
 #include <map>
 #include <numeric>
 
-#include <RR/RRCU.cuh>
+#include <RR/CUDA/CuCommon.cuh>
 
 #include <omp.h>
 #include <stdio.h>
@@ -1473,7 +1473,7 @@ void run() {
 			mass_,
 			eps2_
 		);
-		CuCall(ACCEL, N_total / BLOCK_SIZE, BLOCK_SIZE) (
+		CuCall(ACCEL_kernel, N_total / BLOCK_SIZE, BLOCK_SIZE) (
 			acc_,
 			pos_,
 			pos_,
@@ -1557,7 +1557,7 @@ void run() {
 			);
 		}
 		else {
-			CuCall(ACCEL, N_total / BLOCK_SIZE, BLOCK_SIZE) (
+			CuCall(ACCEL_kernel, N_total / BLOCK_SIZE, BLOCK_SIZE) (
 				acct_,
 				post_,
 				post_,

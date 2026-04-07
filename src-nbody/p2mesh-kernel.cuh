@@ -22,15 +22,15 @@ __global__ void assignParticlesToCells(
     real3 p = particles_pos[i_part];
 
     // Вычисление индексов ячейки
-    int ix = clamp(
+    int ix = cuda::std::clamp(
         (int)((p.x - wave_eq_data_.domainMin.x) / wave_eq_data_.cellSize.x),
         (int)0,
         (int)(wave_eq_data_.gridSize.x - 1));
-    int iy = clamp(
+    int iy = cuda::std::clamp(
         (int)((p.y - wave_eq_data_.domainMin.y) / wave_eq_data_.cellSize.y),
         (int)0,
         (int)(wave_eq_data_.gridSize.y - 1));
-    int iz = clamp(
+    int iz = cuda::std::clamp(
         (int)((p.z - wave_eq_data_.domainMin.z) / wave_eq_data_.cellSize.z),
         (int)0,
         (int)(wave_eq_data_.gridSize.y - 1));

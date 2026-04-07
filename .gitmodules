@@ -1,0 +1,3 @@
+[submodule "extern/RR"]
+	path = extern/RR
+	url = https://github.com/RackotRR/RR.git

@@ -2,6 +2,8 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 
+#include <cuda/algorithm>
+
 #define PI 3.14159265358979
 #define BLOCK_SIZE 512
 #define BLOCK_SIZE_b 512
