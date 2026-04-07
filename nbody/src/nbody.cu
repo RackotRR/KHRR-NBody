@@ -24,7 +24,6 @@
 #include "nbody-kernel.cuh"
 #include "p2mesh-kernel.cuh"
 #include "wave-kernel.cuh"
-
 using namespace RR::CUDA;
 
 real Z_max, E0;
@@ -1130,7 +1129,7 @@ void run() {
 		Nbody,
 		Wave
 	};
-	NBodySolver solver = NBodySolver::Wave;
+	NBodySolver solver = NBodySolver::Nbody;
 
     constexpr int _nx = 200;
     constexpr double _dx = 0.2;
@@ -1480,7 +1479,8 @@ void run() {
 			mass_,
 			eps2_
 		);
-
+		phi_.to_vector(phi_host);
+		acc_.to_vector(acc_host);
 	}
 	timer_setup.stop();
 	std::cout << "time for setup: " << timer_setup.elapsedSeconds() << " seconds " << std::endl;

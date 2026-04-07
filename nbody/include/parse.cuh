@@ -322,6 +322,11 @@ __host__ std::vector<GalaxyProperties> read_galaxy_properties(const std::filesys
 
 	std::string filename = path.string();
 	FILE* outf = fopen(filename.c_str(), "r");
+	if (nullptr == outf) {
+		throw std::runtime_error{
+			std::format("Can't open galaxy properties file: \"{}\"", filename)
+		};
+	}
 
 	int galaxies_count = 0;
 	int galaxy_id = 0;

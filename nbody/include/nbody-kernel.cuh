@@ -99,19 +99,22 @@ __global__ void ACCEL_kernel(
 	__shared__ real eps2_other[BLOCK_SIZE];
 
 	int i_curr_global = threadIdx.x + blockIdx.x * blockDim.x;
+
+	if (i_curr_global >= dd.NN) return;
+
 	real3 p_curr = pos_i[i_curr_global];
 	real eps2_curr = eps2_j[i_curr_global];
 	real3 f_sum = make_real3(0.0, 0.0, 0.0);
 
 	for (int block = 0; block < gridDim.x; block++) {
-		int i_other_global = threadIdx.x + block * BLOCK_SIZE;
+		int i_other_global = threadIdx.x + block * blockDim.x;
 		pos_other[threadIdx.x] = pos_j[i_other_global];
 		mass_other[threadIdx.x] = mass_j[i_other_global];
 		eps2_other[threadIdx.x] = eps2_j[i_other_global];
 
 		__syncthreads();
 
-		for (int i_other_local = 0; i_other_local < BLOCK_SIZE; ++i_other_local) {
+		for (int i_other_local = 0; i_other_local < blockDim.x; ++i_other_local) {
 			real3 dp = make_real3(
 				pos_other[i_other_local].x - p_curr.x,
 				pos_other[i_other_local].y - p_curr.y,
