@@ -32,17 +32,83 @@ real3 Imp0, L0;
 DataBlock d;
 WaveEqData wave_eq_data;
 
-void check_energy(
-	const std::vector<double>& cell_mass,
-	const std::vector<double>& cell_phi,
-	int num_cells
+struct ConvertParticlesParams {
+	int num_particles;
+	int num_cells;
+	int num_blocks;
+	int over_particles;
+	int over_cells;
+	int over_blocks;
+	int nx;
+};
+
+struct MeshContext {
+	CuDarray<ParticleCellInfo> particles_cell_info_;
+	CuDarray<CellInfo> cell_info_;
+	CuDarray<int> cell_particles_count_;
+	CuDarray<int> particles_in_block_;
+	CuDarray<real> cell_mass_;
+
+	MeshContext() = default;
+
+	using Ptr = std::shared_ptr<MeshContext>;
+	static Ptr make(const ConvertParticlesParams& params) {
+		Ptr context = std::make_shared<MeshContext>();
+		context->particles_cell_info_ = CuDarray<ParticleCellInfo>(params.num_particles);
+		context->cell_info_ = CuDarray<CellInfo>(params.num_cells);
+		context->cell_particles_count_ = CuDarray<int>(params.num_cells);
+		context->particles_in_block_ = CuDarray<int>(params.num_blocks);
+		context->cell_mass_ = CuDarray<real>(params.num_cells);
+		return context;
+	}
+};
+
+__host__ std::ios::openmode get_openmode(int it) {
+	return it == 0
+		? std::ios::out
+		: std::ios::app;
+}
+
+MeshContext::Ptr convert_particles_to_grid(
+	const ConvertParticlesParams& params,
+	const CuDarray<real3>& particles_pos_,
+	const CuDarray<real>& particles_mass_,
+	MeshContext::Ptr mesh_context
 )
 {
-	double ep = 0;
-	for (size_t i = 0; i < num_cells; ++i) {
-		ep += 0.5 * cell_mass[i] * cell_phi[i];
-	}
-	printf("ep: %g\n", ep);
+	CuDeviceSync();
+
+	mesh_context->particles_cell_info_.set_zero();
+	mesh_context->cell_info_.set_zero();
+	mesh_context->cell_particles_count_.set_zero();
+	mesh_context->particles_in_block_.set_zero();
+	mesh_context->cell_mass_.set_zero();
+
+    CuCall(assignParticlesToCells, params.over_particles, params.over_blocks) (
+        particles_pos_,
+        mesh_context->particles_cell_info_,
+        mesh_context->cell_info_,
+        mesh_context->cell_particles_count_,
+        params.num_particles
+    );
+    CuCall(computePrefixSums, params.over_cells, params.over_blocks) (
+        mesh_context->cell_info_,
+        mesh_context->particles_in_block_,
+        params.num_cells
+    );
+    CuCall(adjustGlobalPrefixSums, params.over_cells, params.over_blocks) (
+        mesh_context->cell_info_,
+        mesh_context->particles_in_block_,
+        params.num_cells
+    );
+	CuCall(computeCellMassesUnsorted, params.over_particles, params.over_blocks) (
+		particles_mass_,
+		mesh_context->particles_cell_info_,
+		mesh_context->cell_mass_,
+		params.num_particles
+	);
+
+	return mesh_context;
 }
 
 void check_cell_particle_info_match(
@@ -126,61 +192,214 @@ auto check_mass(
 		<< std::endl;
 }
 
-struct ConvertParticlesParams {
-	int num_particles;
-	int num_cells;
-	int num_blocks;
-	int over_particles;
-	int over_cells;
-	int over_blocks;
-	int nx;
-};
-
-auto convert_particles_to_grid(
-	const ConvertParticlesParams& params,
-	const CuDarray<real3>& particles_pos_,
-	const CuDarray<real>& particles_mass_,
-	CuDarray<ParticleCellInfo>& particles_cell_info_,
-	CuDarray<CellInfo>& cell_info_,
-	CuDarray<int>& cell_particles_count_,
-	CuDarray<int>& particles_in_block_,
-	CuDarray<real>& cell_mass_
+real3 calc_cell_energy(
+	const std::vector<real>& cell_mass,
+	const std::vector<real>& cell_phi,
+	const std::vector<real3>& cell_imp,
+	long num_cells
 )
 {
-	CuDeviceSync();
+	double EpTwice = 0;
+	double EkTwice = 0;
+	#pragma omp parallel for reduction(+:EpTwice,EkTwice)
+	for (long i = 0; i < num_cells; ++i) {
+		if (cell_mass[i] > 0) {
+			EpTwice += cell_mass[i] * cell_phi[i];
+			EkTwice += dot3(cell_imp[i], cell_imp[i]) / cell_mass[i];
+		}
+	}
 
-	particles_cell_info_.set_zero();
-	cell_info_.set_zero();
-	cell_particles_count_.set_zero();
-	particles_in_block_.set_zero();
-	cell_mass_.set_zero();
+	double Ep = 0.5 * EpTwice;
+	double Ek = 0.5 * EkTwice;
+	double E = Ep + Ek;
 
-    CuCall(assignParticlesToCells, params.over_particles, params.over_blocks) (
-        particles_pos_,
-        particles_cell_info_,
-        cell_info_,
-        cell_particles_count_,
-        params.num_particles
-    );
-    CuCall(computePrefixSums, params.over_cells, params.over_blocks) (
-        cell_info_,
-        particles_in_block_,
-        params.num_cells
-    );
-    CuCall(adjustGlobalPrefixSums, params.over_cells, params.over_blocks) (
-        cell_info_,
-        particles_in_block_,
-        params.num_cells
-    );
-	CuCall(computeCellMassesUnsorted, params.over_particles, params.over_blocks) (
-		particles_mass_,
-		particles_cell_info_,
-		cell_mass_,
-		params.num_particles
-	);
+	std::cout
+		<< std::format("Grid total Energy: (E: {}, Ek: {}, Ep: {})", E, Ek, Ep)
+		<< std::endl;
+	return make_real3(E, Ek, Ep);
 }
 
+real3 calc_cell_imp(const std::vector<real3>& cell_imp) {
+	double ImpX = 0.0;
+	double ImpY = 0.0;
+	double ImpZ = 0.0;
+	long N = static_cast<long>(cell_imp.size());
+	#pragma omp parallel for reduction(+:ImpX,ImpY,ImpZ)
+	for (long i = 0; i < N; i++) {
+		ImpX += cell_imp[i].x;
+		ImpY += cell_imp[i].y;
+		ImpZ += cell_imp[i].z;
+	}
+
+	std::cout
+		<< std::format("Grid total Impulse: ({}, {}, {})", ImpX, ImpY, ImpZ)
+		<< std::endl;
+	return make_real3(ImpX, ImpY, ImpZ);
+}
+real3 calc_cell_imp(
+	MeshContext::Ptr mesh_context,
+	const ConvertParticlesParams& params,
+	const CuDarray<real3>& part_pos_,
+	const CuDarray<real3>& part_vel_,
+	const CuDarray<real>& part_mass_
+)
+{
+	mesh_context = convert_particles_to_grid(
+		params,
+		part_pos_,
+		part_mass_,
+		mesh_context
+	);
+
+	static CuDarray<real3> cell_imp_(params.num_cells);
+	cell_imp_.set_zero();
+	CuCall(calcImpField, params.over_particles, params.over_blocks)(
+		cell_imp_,
+		part_mass_,
+		part_vel_,
+		mesh_context->particles_cell_info_,
+		params.num_particles
+	);
+	static std::vector<real3> cell_imp;
+	cell_imp_.to_vector(cell_imp);
+	return calc_cell_imp(cell_imp);
+}
+auto check_cell_conservation(
+	MeshContext::Ptr mesh_context,
+	const ConvertParticlesParams& params,
+	const CuDarray<real3>& part_pos_,
+	const CuDarray<real3>& part_vel_,
+	const CuDarray<real>& part_mass_,
+	const CuDarray<real>& cell_phi_,
+	int it
+)
+{
+	mesh_context = convert_particles_to_grid(
+		params,
+		part_pos_,
+		part_mass_,
+		mesh_context
+	);
+
+	static CuDarray<real3> cell_imp_(params.num_cells);
+	cell_imp_.set_zero();
+	CuCall(calcImpField, params.over_particles, params.over_blocks)(
+		cell_imp_,
+		part_mass_,
+		part_vel_,
+		mesh_context->particles_cell_info_,
+		params.num_particles
+	);
+	static std::vector<real3> cell_imp;
+	static std::vector<real> cell_phi;
+	static std::vector<real> cell_mass;
+	cell_imp_.to_vector(cell_imp);
+	cell_phi_.to_vector(cell_phi);
+	mesh_context->cell_mass_.to_vector(cell_mass);
+
+	real3 imp = calc_cell_imp(cell_imp);
+	real3 energy = calc_cell_energy(
+		cell_mass,
+		cell_phi,
+		cell_imp,
+		params.num_cells
+	);
+
+	std::ofstream stream{ OUT_PATH / "conservation_cell.csv", get_openmode(it) };
+	static std::once_flag once_flag;
+	std::call_once(once_flag, [&stream]{
+		stream << "it, ImpX, ImpY, ImpZ, E, Ek, Ep" << std::endl;
+	});
+
+	stream
+		<< it << ", "
+		<< imp.x << ", "
+		<< imp.y << ", "
+		<< imp.z << ", "
+		<< energy.x << ", "
+		<< energy.y << ", "
+		<< energy.z
+		<< std::endl;
+}
+real3 calc_particles_imp(
+	const std::vector<real3>& part_vel,
+	const std::vector<real>& part_mass,
+	long num_particles
+)
+{
+	double ImpX = 0.0;
+	double ImpY = 0.0;
+	double ImpZ = 0.0;
+	#pragma omp parallel for reduction(+:ImpX,ImpY,ImpZ)
+	for (long i = 0; i < num_particles; i++) {
+		double mass = part_mass[i];
+		ImpX += part_vel[i].x * mass;
+		ImpY += part_vel[i].y * mass;
+		ImpZ += part_vel[i].z * mass;
+	}
+
+	std::cout
+		<< std::format("Particles total Impulse: ({}, {}, {})", ImpX, ImpY, ImpZ)
+		<< std::endl;
+	return make_real3(ImpX, ImpY, ImpZ);
+}
+real3 calc_particles_energy(
+	const std::vector<real3>& part_vel,
+	const std::vector<real>& part_mass,
+	const std::vector<real>& part_phi,
+	long num_particles
+)
+{
+	double EpTwice = 0;
+	double EkTwice = 0;
+	#pragma omp parallel for reduction(+:EpTwice,EkTwice)
+	for (long i = 0; i < num_particles; ++i) {
+		if (part_mass[i] > 0) {
+			EpTwice += part_mass[i] * part_phi[i];
+			EkTwice += dot3(part_vel[i], part_vel[i]) * part_mass[i];
+		}
+	}
+
+	double Ep = 0.5 * EpTwice;
+	double Ek = 0.5 * EkTwice;
+	double E = Ep + Ek;
+
+	std::cout
+		<< std::format("Particles total Energy: (E: {}, Ek: {}, Ep: {})", E, Ek, Ep)
+		<< std::endl;
+	return make_real3(E, Ek, Ep);
+}
+auto check_particles_conservation(
+	const std::vector<real3>& part_vel,
+	const std::vector<real>& part_mass,
+	const std::vector<real>& part_phi,
+	int it
+)
+{
+	long num_particles = std::min({part_vel.size(), part_mass.size(), part_phi.size()});
+	real3 imp = calc_particles_imp(part_vel, part_mass, num_particles);
+	real3 energy = calc_particles_energy(part_vel, part_mass, part_phi, num_particles);
+
+	std::ofstream stream{ OUT_PATH / "conservation_part.csv", get_openmode(it) };
+	static std::once_flag once_flag;
+	std::call_once(once_flag, [&stream]{
+		stream << "it, ImpX, ImpY, ImpZ, E, Ek, Ep" << std::endl;
+	});
+
+	stream
+		<< it << ", "
+		<< imp.x << ", "
+		<< imp.y << ", "
+		<< imp.z << ", "
+		<< energy.x << ", "
+		<< energy.y << ", "
+		<< energy.z
+		<< std::endl;
+}
+
+
 auto calc_acceleration_by_grid(
+	MeshContext::Ptr mesh_context,
 	const ConvertParticlesParams& params,
 	const CuDarray<real3>& particles_pos_,
 	const CuDarray<real>& particles_mass_,
@@ -191,11 +410,6 @@ auto calc_acceleration_by_grid(
 	int iterations
 )
 {
-	static CuDarray<ParticleCellInfo> particles_cell_info_(params.num_particles);
-	static CuDarray<CellInfo> cell_info_(params.num_cells);
-	static CuDarray<int> cell_particles_count_(params.num_cells);
-	static CuDarray<int> particles_in_block_(params.num_blocks);
-	static CuDarray<real> cell_mass_(params.num_cells);
 	static CuDarray<real3> cell_acc_(params.num_cells);
 	static CuDarray<real> cell_phi_next_(params.num_cells);
 
@@ -210,11 +424,7 @@ auto calc_acceleration_by_grid(
 		params,
 		particles_pos_,
 		particles_mass_,
-		particles_cell_info_,
-		cell_info_,
-		cell_particles_count_,
-		particles_in_block_,
-		cell_mass_
+		mesh_context
 	);
 	timer.stop();
 	float time_convert_particles_to_grid = timer.elapsedMilliseconds();
@@ -232,7 +442,7 @@ auto calc_acceleration_by_grid(
 			cell_phi_next_,
 			cell_phi_curr_,
 			cell_phi_prev_,
-			cell_mass_
+			mesh_context->cell_mass_
 		);
 		swap(cell_phi_prev_, cell_phi_curr_);
 		swap(cell_phi_curr_, cell_phi_next_);
@@ -251,13 +461,13 @@ auto calc_acceleration_by_grid(
 	CuCall(apply_acceleration_to_particles, params.over_particles, params.over_blocks) (
 		particles_acc_,
 		cell_acc_,
-		particles_cell_info_,
+		mesh_context->particles_cell_info_,
 		params.num_particles
 	);
 	CuCall(apply_cell_to_particles, params.over_particles, params.over_blocks) (
 		particles_phi_,
 		cell_phi_curr_,
-		particles_cell_info_,
+		mesh_context->particles_cell_info_,
 		params.num_particles
 	);
 	timer.stop();
@@ -386,12 +596,6 @@ auto convert_particles(
 		cell_info,
 		particles_cell_info,
 		num_particles,
-		num_cells
-	);
-
-	check_energy(
-		cell_mass,
-		cell_phi,
 		num_cells
 	);
 
@@ -754,11 +958,6 @@ __host__ void print_particles_bin(
 	printf("print particles fin\n");
 }
 
-__host__ std::ios::openmode get_openmode(int it) {
-	return it == 0
-		? std::ios::out
-		: std::ios::app;
-}
 
 __host__ void  result(
 	const std::vector<real3>& pos,
@@ -965,6 +1164,12 @@ __host__ auto read_start_info(const char* filename) {
 
 	char temp[FILENAME_MAX];
 	FILE* outf = fopen(filename, "r");
+	if (nullptr == outf) {
+		throw std::runtime_error{
+			std::format("Can't open start info file: \"{}\"", filename)
+		};
+	}
+
 	fscanf(outf, "%d  %[^\n]", &i_cont, temp);
 	fscanf(outf, "%lf  %[^\n]", &tmax, temp);
 	fscanf(outf, "%lf  %[^\n]", &dtsave, temp);
@@ -1129,13 +1334,17 @@ void run() {
 		Nbody,
 		Wave
 	};
-	NBodySolver solver = NBodySolver::Nbody;
+	NBodySolver solver = NBodySolver::Wave;
+	bool need_check_nbody_impulse = true;
 
     constexpr int _nx = 200;
     constexpr double _dx = 0.2;
     constexpr double _domain_l = 0.5 * _nx * _dx;
 	constexpr double _c_wave = 4574.337022617616;
-	const double _dt_wave = 0.5 * _dx / (_c_wave * sqrt(3));
+	const double _dt_wave_cfl = 0.5 * _dx / (_c_wave * sqrt(3));
+	const int _iterations_wave_min = 10 * _nx;
+	const double _dt_wave_setup = dtgrav / _iterations_wave_min;
+	const double _dt_wave = std::min(_dt_wave_cfl, _dt_wave_setup);
 	const double _diss_base = 0.1;
 	const double _diss_extra = 0.01;
 	const double _sim_l = _domain_l;
@@ -1201,6 +1410,8 @@ void run() {
 	convert_particles_params.over_blocks = _over_blocks;
 	convert_particles_params.over_cells = _over_cells;
 	convert_particles_params.over_particles = _over_particles;
+	auto mesh_context = MeshContext::make(convert_particles_params);
+	std::cout << "GPU memory allocated for mesh context: " << CuDarrayBase::get_total_allocated_mb() << " mb" << std::endl;
 
 	d.Ns = N_star;
 	d.NN = N_total;
@@ -1439,7 +1650,7 @@ void run() {
 
 	CuDarray<real> cell_phi_prev_(_num_cells);
 	CuDarray<real> cell_phi_curr_(_num_cells);
-
+	CuDarray<real3> cell_imp_(_num_cells);
 
 	//------Расчет грав. сил-----------------------------------------------------
 	printf("calc grav forces\n");
@@ -1453,6 +1664,7 @@ void run() {
 			cell_phi_prev_,
 			cell_phi_curr_
 		) = calc_acceleration_by_grid(
+			mesh_context,
 			convert_particles_params,
 			pos_,
 			mass_,
@@ -1551,6 +1763,7 @@ void run() {
 				cell_phi_prev_,
 				cell_phi_curr_
 			) = calc_acceleration_by_grid(
+				mesh_context,
 				convert_particles_params,
 				post_,
 				mass_,
@@ -1585,6 +1798,21 @@ void run() {
 			acc_
 		);
 
+		vel_.to_vector(vel_host);
+		phi_.to_vector(phi_host);
+		check_particles_conservation(vel_host, mass_host, phi_host, it * itt);
+		if (solver == NBodySolver::Wave) {
+			check_cell_conservation(
+				mesh_context,
+				convert_particles_params,
+				pos_,
+				vel_,
+				mass_,
+				cell_phi_curr_,
+				it * itt
+			);
+		}
+
 		timer_base_cycle.stop();
 		float time_base_cycle_sec = timer_base_cycle.elapsedSeconds();
 		//----------------------------------------------------------------------------------------------------------------------
@@ -1612,26 +1840,16 @@ void run() {
 					eps2_
 				);
 
-				static CuDarray<ParticleCellInfo> particles_cell_info_(_num_particles);
-				static CuDarray<CellInfo> cell_info_(_num_cells);
-				static CuDarray<int> cell_particles_count_(_num_cells);
-				static CuDarray<int> particles_in_block_(_num_cell_blocks);
-				static CuDarray<real> cell_mass_(_num_cells);
-
 				convert_particles_to_grid(
 					convert_particles_params,
 					pos_,
 					mass_,
-					particles_cell_info_,
-					cell_info_,
-					cell_particles_count_,
-					particles_in_block_,
-					cell_mass_
+					mesh_context
 				);
 				CuCall(computeCellPhiUnsorted, _over_particles, _over_blocks) (
 					phi_,
-					particles_cell_info_,
-					cell_info_,
+					mesh_context->particles_cell_info_,
+					mesh_context->cell_info_,
 					cell_phi_curr_,
 					_num_particles
 				);
@@ -1701,6 +1919,38 @@ void run() {
 					<< acc_host[i].z << std::endl;
 			}
 
+			// print another sample
+			auto print_sample2 = [&](int i) {
+				std::fstream::openmode openmode = it == 1
+					? std::fstream::out
+					: std::fstream::app;
+
+				std::ofstream stream_sample{ OUT_PATH / std::format("sample{}.csv", i), openmode };
+
+				if (1 == it) {
+					stream_sample << "it, x, y, z, vx, vy, vz, ax, ay, az" << std::endl;
+				}
+
+				real fi = atan2(pos_host[i].y, pos_host[i].x);
+				real r = norm2(make_real2(pos_host[i].x, pos_host[i].y));
+				real vr = (vel_host[i].x*pos_host[i].x + vel_host[i].y*pos_host[i].y) / r;
+				real vfi = (vel_host[i].y*pos_host[i].x - vel_host[i].x*pos_host[i].y) / r;
+				real acc_abs = norm3(acc_host[i]);
+
+				stream_sample
+					<< it * itt << ", "
+					<< pos_host[i].x << ", "
+					<< pos_host[i].y << ", "
+					<< pos_host[i].z << ", "
+					<< vel_host[i].x << ", "
+					<< vel_host[i].y << ", "
+					<< vel_host[i].z << ", "
+					<< acc_host[i].x << ", "
+					<< acc_host[i].y << ", "
+					<< acc_host[i].z << std::endl;
+			};
+print_sample2(0);
+print_sample2(1);
 
 			result(pos_host, vel_host, mass_host, it, t, phi_host, it*itt);
 

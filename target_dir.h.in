@@ -5,5 +5,5 @@ namespace fs = std::filesystem;
 inline const auto BASE_PATH = fs::path{ "@CMAKE_SOURCE_DIR@" }.make_preferred() / "data" / "nbody";
 inline const auto BIN_PATH = BASE_PATH / "bin";
 inline const auto OUT_PATH = BASE_PATH / "out";
-inline const auto INI_PATH = BASE_PATH / "ini";
+inline const auto INI_PATH = BASE_PATH / "debug" / "init";
 inline const auto DEBUG_PATH = BASE_PATH / "debug";

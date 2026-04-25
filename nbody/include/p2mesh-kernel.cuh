@@ -297,3 +297,41 @@ __global__ void acc_abs(
 
     acc_abs[i] = norm3(acc[i]);
 }
+
+// предварительно нужно занулить импульс
+__global__ void calcImpField(
+    real3* cell_imp,
+    const real* particle_mass,
+    const real3* particle_vel,
+    const ParticleCellInfo* particles_cell_info,
+    const int numParticles
+)
+{
+    int i_particle = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_particle >= numParticles) return;
+
+    int i_cell = particles_cell_info[i_particle].cell_id;
+
+    const real3& v = particle_vel[i_particle];
+    const real& m = particle_mass[i_particle];
+    cell_imp[i_cell].x += v.x * m;
+    cell_imp[i_cell].y += v.y * m;
+    cell_imp[i_cell].z += v.z * m;
+}
+
+__global__ void calcVelField(
+    real3* cell_vel,
+    const real3* cell_imp,
+    const real* cell_mass,
+    const int numCells
+)
+{
+    int i_cell = threadIdx.x + blockIdx.x * blockDim.x;
+    if (i_cell >= numCells) return;
+
+    if (cell_mass[i_cell] > 0) {
+        cell_vel[i_cell].x = cell_imp[i_cell].x / cell_mass[i_cell];
+        cell_vel[i_cell].y = cell_imp[i_cell].y / cell_mass[i_cell];
+        cell_vel[i_cell].z = cell_imp[i_cell].z / cell_mass[i_cell];
+    }
+}
