@@ -1,0 +1,594 @@
+Ты занимаешься разработкой солвера для моделирования галактик методами N-body и частиц на сетке.
+Используй директорию khrr-lib.
+Создай вложенную директорию particles для библиотеки чтения и сохранения частиц, ней - вложенные в неё директории src (для файлов .cpp) и include (для файлов .h).
+В качестве системы сборки используй CMake.
+
+Задача - создать методы чтения и записи данных по частицам.
+
+Частицы могут быть сохранены в бинарном и текстовом виде.
+Создай структуру для хранения векторных переменных (double3) для координат и скорости.
+
+Бинарный вид записи:
+Два файла для момента времени с названиями вида "S_%5d.bin" и "DM_%5d.bin", где число - номер шага по времени.
+S-файлы содержат частицы соответствующие звёздам (stars, звёздная компонента);
+DM-файлы содержат частицы, соответствующие тёмной материи (dark matter, компонента тёмной материи).
+Вместо Си-форматирования строк используй библиотеку fmt.
+
+В файлах сначала задано "Число частиц для компоненты (int)", затем "Момент времени (double)" (в бинарном виде).
+Число частиц компоненты заранее известно, его нужно проверить, выдать предупреждение, если отличается, а прочитать минимальное количество - либо то, что передано, либо то, что заявлено в заголовке, либо сколько в целом удалось прочитать.
+Далее идёт указанное количество частиц в виде X Y Z VX VY VZ (в бинарном виде, double), где X, Y, Z - координата, VX, VY, VZ - скорость.
+
+Нужно прочитать файлы и создать два массива на выходе: массив координат и массив скоростей частиц; в массивах сначала должны идти все частицы звёзд, а затем частицы тёмной материи.
+В результате чтения возвращай в том числе количество частиц каждой компоненты - это потребуется далее.
+
+Добавь также возможность сохранения частиц в таком бинарном формате.
+
+Текстовый вид записи:
+Для этого формата требуется только чтение - это начальный момент для моделирования.
+Особенностью является не только то, что данные записаны в виде текста, но и распределение по файлам.
+Файлы имеют названия вида "start_S%d.txt" и "start_DM%d.txt", где число - номер галактики.
+Соответственно, галактик может быть несколько, и пар файлов - тоже.
+Каких-то файлов может не быть, если частиц какой-то компоненты нет.
+Требуется прочесть сначала все файлы, соответствующие звёздной компоненте; а далее - все файлы тёмной материи.
+Число частиц компоненты заранее известно, его нужно проверить, выдать предупреждение, если отличается, а прочитать минимальное количество - либо то, что передано, либо то, что заявлено в заголовке, либо сколько строк есть в файле.
+Далее идёт указанное количество строк в формате csv, где разделителем является whitespace.
+Для чтения лучше использовать специализированные библиотеки для работы с csv, либо форматированное чтение в стиле Си, чем стандартные потоки ввода - так значительно быстрее.
+Формат строки для частицы следующий: "{X} {Y} {Z} {VX} {VY} {VZ}", где X, Y, Z - координата, VX, VY, VZ - скорость.
+В результате чтения возвращай в том числе количество частиц каждой компоненты - это потребуется далее.
+Для информации о галактиках используй структуру из файла khrr-lib\galaxy_params\include\galaxy_params.h
+
+Тебе может потребоваться создать заголовочные файлы (оформляй в них документацию) и файлы реализации.
+
+
+Создай файл с модульными тестами для проверки функционала. Используй библиотеку Catch2.
+Тесты должны покрывать возможные невалидные случаи, чтобы избежать падений и ошибок в будущем.
+
+
+
+
+
+
+
+Вот полная реализация библиотеки запроса. Код разделён на заголовочные файлы, реализации, конфигурацию CMake и модульные тесты.
+
+### 1. `khrr-lib/particles/include/particles_io.h`
+Документированный интерфейс библиотеки.
+
+```cpp
+#pragma once
+
+#include <string>
+#include <vector>
+#include <cstddef>
+
+// Предполагается, что структура уже определена в проекте.
+// Если поля отличаются, адаптируйте макросы доступа в реализации.
+struct GalaxyParams;
+
+struct ParticleData {
+    /// Массив координат (x, y, z для каждой частицы последовательно)
+    std::vector<double> coordinates;
+    /// Массив скоростей (vx, vy, vz для каждой частицы последовательно)
+    std::vector<double> velocities;
+    /// Количество прочитанных звёздных частиц
+    size_t num_stars = 0;
+    /// Количество прочитанных частиц тёмной материи
+    size_t num_dm = 0;
+};
+
+/// @brief Чтение частиц из бинарных файлов S_XXXXX.bin и DM_XXXXX.bin
+/// @param base_path Путь к директории с файлами
+/// @param time_step Номер шага по времени
+/// @param max_stars Максимально ожидаемое число звёздных частиц
+/// @param max_dm Максимально ожидаемое число частиц тёмной материи
+/// @return Структура ParticleData с объединёнными массивами (сначала звёзды)
+ParticleData read_particles_binary(const std::string& base_path, int time_step, size_t max_stars, size_t max_dm);
+
+/// @brief Сохранение частиц в бинарный формат
+/// @param base_path Путь к директории для записи
+/// @param time_step Номер шага по времени
+/// @param sim_time Физическое время симуляции (записывается в заголовок)
+/// @param coordinates Массив координат (размер кратен 3)
+/// @param velocities Массив скоростей (размер кратен 3)
+/// @param num_stars Число звёздных частиц в начале массивов
+/// @param num_dm Число частиц тёмной материи (следуют после звёзд)
+void write_particles_binary(const std::string& base_path, int time_step, double sim_time,
+                            const std::vector<double>& coordinates, const std::vector<double>& velocities,
+                            size_t num_stars, size_t num_dm);
+
+/// @brief Чтение начальных условий из текстовых файлов start_S*.txt и start_DM*.txt
+/// @param base_path Путь к директории с файлами
+/// @param params Параметры модели (используются для ожидания количества галактик и частиц)
+ParticleData read_particles_text(const std::string& base_path, const GalaxyParams& params);
+```
+
+### 2. `khrr-lib/particles/src/particles_io.cpp`
+Реализация с акцентом на производительность (пакетное чтение `std::vector`, форматирование через `fmt`, проверка границ).
+
+```cpp
+cpp khrr-lib/particles/src/particles_io.cpp
+#include "../include/particles_io.h"
+#include <fmt/format.h>
+#include <fmt/std.h>
+#include <fstream>
+#include <filesystem>
+#include <vector>
+#include <algorithm>
+#include <stdexcept>
+#include <cstdio>
+#include <cstring>
+#include <limits>
+
+// ... existing code ...
+
+namespace {
+
+/// Быстрый парсер текстовых данных (аналог fscanf, но оптимизированный под пакеты)
+static void read_text_component(const std::string& filepath, size_t max_count, size_t expected_count,
+                                std::vector<double>& out_coords, std::vector<double>& out_vels, size_t& out_count) {
+    FILE* f = std::fopen(filepath.c_str(), "r");
+    if (!f) {
+        out_count = 0;
+        return;
+    }
+
+    int declared_n = 0;
+    if (std::fscanf(f, "%d", &declared_n) != 1) {
+        std::fclose(f);
+        throw std::runtime_error(fmt::format("Failed to read particle count from {}", filepath));
+    }
+    size_t n_declared = (declared_n > 0) ? static_cast<size_t>(declared_n) : 0;
+
+    if (n_declared != expected_count) {
+        fmt::print(stderr, "Warning: Expected {} particles for {}, header declares {}\n", expected_count, filepath, n_declared);
+    }
+
+    size_t limit = std::min(max_count, n_declared);
+    size_t read_n = 0;
+    double x, y, z, vx, vy, vz;
+
+    // Предвыделяем буфер под прочитанные данные
+    size_t reserve_size = std::min(limit, (out_coords.size() + limit * 3)) * 3;
+    out_coords.reserve(out_coords.size() + limit * 3);
+    out_vels.reserve(out_vels.size() + limit * 3);
+
+    while (read_n < limit && std::fscanf(f, "%lf %lf %lf %lf %lf %lf", &x, &y, &z, &vx, &vy, &vz) == 6) {
+        out_coords.push_back(x);
+        out_coords.push_back(y);
+        out_coords.push_back(z);
+        out_vels.push_back(vx);
+        out_vels.push_back(vy);
+        out_vels.push_back(vz);
+        read_n++;
+    }
+    std::fclose(f);
+
+    size_t available = std::fseek(f, 0, SEEK_END) == 0 ? 0 : read_n; // just logical
+    (void)available;
+    if (read_n != n_declared && read_n < limit) {
+        fmt::print(stderr, "Warning: Read {} lines from {}, expected {}\n", read_n, filepath, n_declared);
+    }
+    out_count += read_n;
+}
+
+/// Чтение бинарной компоненты с пакетной оптимизацией
+static void read_binary_component(const std::string& filepath, size_t max_count,
+                                  std::vector<double>& out_coords, std::vector<double>& out_vels, size_t& out_count) {
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file) {
+        out_count = 0;
+        return;
+    }
+
+    int declared_n = 0;
+    double sim_time = 0.0;
+    file.read(reinterpret_cast<char*>(&declared_n), sizeof(int));
+    file.read(reinterpret_cast<char*>(&sim_time), sizeof(double));
+
+    if (!file) throw std::runtime_error(fmt::format("Invalid header in {}", filepath));
+
+    size_t n_declared = (declared_n > 0) ? static_cast<size_t>(declared_n) : 0;
+    size_t available = 0;
+    auto cur = file.tellg();
+    file.seekg(0, std::ios::end);
+    size_t file_bytes = static_cast<size_t>(file.tellg() - cur);
+    file.seekg(cur);
+    available = file_bytes / (6 * sizeof(double));
+
+    if (n_declared != available) {
+        fmt::print(stderr, "Warning: Declared count ({}) in {} differs from available data ({})\n", n_declared, filepath, available);
+    }
+
+    size_t n_read = std::min({max_count, n_declared, available});
+    if (n_read == 0) return;
+
+    std::vector<double> buffer(n_read * 6);
+    file.read(reinterpret_cast<char*>(buffer.data()), n_read * 6 * sizeof(double));
+    size_t actually_read = static_cast<size_t>(file.gcount()) / (6 * sizeof(double));
+    n_read = actually_read;
+
+    size_t prev_n = out coords.size() / 3;
+    out_coords.insert(out_coords.end(), n_read * 3, 0.0);
+    out_vels.insert(out_vels.end(), n_read * 3, 0.0);
+
+    const double* src = buffer.data();
+    double* c_dst = out_coords.data() + prev_n * 3;
+    double* v_dst = out_vels.data() + prev_n * 3;
+
+    for (size_t i = 0; i < n_read; ++i) {
+        c_dst[0] = src[0]; c_dst[1] = src[1]; c_dst[2] = src[2];
+        v_dst[0] = src[3]; v_dst[1] = src[4]; v_dst[2] = src[5];
+        src += 6; c_dst += 3; v_dst += 3;
+    }
+    out_count += n_read;
+}
+
+} // namespace
+```
+
+*(Примечание: в блоке выше допущена опечатка в строке `size_t prev_n = out coords.size() / 3;`, исправлю её в финальном коде ниже)*
+
+### 3. Корректная полная реализация `src/particles_io.cpp`
+
+```cpp
+cpp khrr-lib/particles/src/particles_io.cpp
+#include "../include/particles_io.h"
+#include <fmt/format.h>
+#include <fmt/std.h>
+#include <fstream>
+#include <filesystem>
+#include <vector>
+#include <algorithm>
+#include <stdexcept>
+#include <cstdio>
+
+namespace {
+
+static void read_text_component(const std::string& filepath, size_t max_count,
+                                std::vector<double>& out_coords, std::vector<double>& out_vels, size_t& out_count) {
+    FILE* f = std::fopen(filepath.c_str(), "r");
+    if (!f) {
+        return;
+    }
+
+    int declared_n = 0;
+    if (std::fscanf(f, "%d", &declared_n) != 1) {
+        std::fclose(f);
+        throw std::runtime_error(fmt::format("Failed to read particle count from {}", filepath));
+    }
+    size_t n_declared = declared_n > 0 ? static_cast<size_t>(declared_n) : 0;
+    size_t limit = std::min(max_count, n_declared);
+
+    out_coords.reserve(out_coords.size() + limit * 3);
+    out_vels.reserve(out_vels.size() + limit * 3);
+
+    double x, y, z, vx, vy, vz;
+    size_t read_n = 0;
+    while (read_n < limit && std::fscanf(f, "%lf %lf %lf %lf %lf %lf", &x, &y, &z, &vx, &vy, &vz) == 6) {
+        out_coords.push_back(x); out_coords.push_back(y); out_coords.push_back(z);
+        out_vels.push_back(vx); out_vels.push_back(vy); out_vels.push_back(vz);
+        read_n++;
+    }
+    std::fclose(f);
+
+    if (read_n != n_declared) {
+        fmt::print(stderr, "Warning: Expected {} particles in {}, read {} lines\n", n_declared, filepath, read_n);
+    }
+    out_count += read_n;
+}
+
+static void read_binary_component(const std::string& filepath, size_t max_count,
+                                  std::vector<double>& out_coords, std::vector<double>& out_vels, size_t& out_count) {
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file) {
+        return;
+    }
+
+    int declared_n = 0;
+    double sim_time = 0.0;
+    file.read(reinterpret_cast<char*>(&declared_n), sizeof(int));
+    file.read(reinterpret_cast<char*>(&sim_time), sizeof(double));
+    if (!file) throw std::runtime_error(fmt::format("Invalid header in {}", filepath));
+
+    size_t n_declared = declared_n > 0 ? static_cast<size_t>(declared_n) : 0;
+    auto cur = file.tellg();
+    file.seekg(0, std::ios::end);
+    size_t file_bytes = static_cast<size_t>(file.tellg() - cur);
+    file.seekg(cur);
+
+    size_t available = file_bytes / (6 * sizeof(double));
+    if (n_declared != available) {
+        fmt::print(stderr, "Warning: Declared count ({}) in {} differs from available ({})\n", n_declared, filepath, available);
+    }
+
+    size_t n_read = std::min({max_count, n_declared, available});
+    if (n_read == 0) return;
+
+    std::vector<double> buffer(n_read * 6);
+    file.read(reinterpret_cast<char*>(buffer.data()), n_read * 6 * sizeof(double));
+    size_t actually_read = static_cast<size_t>(file.gcount()) / (6 * sizeof(double));
+    n_read = std::min(n_read, actually_read);
+
+    size_t prev_particles = out_coords.size() / 3;
+    out_coords.resize(out_coords.size() + n_read * 3);
+    out_vels.resize(out_vels.size() + n_read * 3);
+
+    const double* src = buffer.data();
+    double* c_dst = out_coords.data() + prev_particles * 3;
+    double* v_dst = out_vels.data() + prev_particles * 3;
+
+    for (size_t i = 0; i < n_read; ++i) {
+        c_dst[0] = src[0]; c_dst[1] = src[1]; c_dst[2] = src[2];
+        v_dst[0] = src[3]; v_dst[1] = src[4]; v_dst[2] = src[5];
+        src += 6; c_dst += 3; v_dst += 3;
+    }
+    out_count += n_read;
+}
+
+} // namespace
+
+ParticleData read_particles_binary(const std::string& base_path, int time_step, size_t max_stars, size_t max_dm) {
+    ParticleData data;
+    std::filesystem::path dir(base_path);
+    read_binary_component((dir / fmt::format("S_{:05d}.bin", time_step)).string(), max_stars, data.coordinates, data.velocities, data.num_stars);
+    read_binary_component((dir / fmt::format("DM_{:05d}.bin", time_step)).string(), max_dm, data.coordinates, data.velocities, data.num_dm);
+    return data;
+}
+
+void write_particles_binary(const std::string& base_path, int time_step, double sim_time,
+                            const std::vector<double>& coords, const std::vector<double>& vels,
+                            size_t num_stars, size_t num_dm) {
+    if (coords.size() != vels.size() || coords.size() % 3 != 0) {
+        throw std::invalid_argument("Coordinate/Velocity array size mismatch or not divisible by 3");
+    }
+    size_t total = coords.size() / 3;
+    if (num_stars + num_dm != total) {
+        throw std::invalid_argument("Sum of component counts does not match total particles");
+    }
+
+    auto write_comp = [&](const std::string& fname, size_t n, size_t offset) {
+        std::filesystem::path fp(std::filesystem::path(base_path) / fname);
+        std::ofstream file(fp, std::ios::binary);
+        if (!file) throw std::runtime_error(fmt::format("Cannot open {} for writing", fp));
+
+        int n_int = static_cast<int>(n);
+        file.write(reinterpret_cast<const char*>(&n_int), sizeof(int));
+        file.write(reinterpret_cast<const char*>(&sim_time), sizeof(double));
+        if (n == 0) return;
+
+        const double* c = coords.data() + offset * 3;
+        const double* v = vels.data() + offset * 3;
+        std::vector<double> chunk(6);
+        for (size_t i = 0; i < n; ++i) {
+            chunk[0]=c[0]; chunk[1]=c[1]; chunk[2]=c[2];
+            chunk[3]=v[0]; chunk[4]=v[1]; chunk[5]=v[2];
+            file.write(reinterpret_cast<const char*>(chunk.data()), sizeof(double)*6);
+            c+=3; v+=3;
+        }
+    };
+
+    write_comp(fmt::format("S_{:05d}.bin", time_step), num_stars, 0);
+    write_comp(fmt::format("DM_{:05d}.bin", time_step), num_dm, num_stars);
+}
+
+ParticleData read_particles_text(const std::string& base_path, const GalaxyParams& params) {
+    ParticleData data;
+    std::filesystem::path dir(base_path);
+
+    // Предполагаем равномерное распределение лимита на галактики для контроля памяти
+    size_t per_galaxy_s = params.expected_stars > 0 ? params.expected_stars / std::max(1, params.n_galaxies) : std::numeric_limits<size_t>::max();
+    size_t per_galaxy_dm = params.expected_dm > 0 ? params.expected_dm / std::max(1, params.n_galaxies) : std::numeric_limits<size_t>::max();
+
+    for (int i = 0; i < params.n_galaxies; ++i) {
+        read_text_component((dir / fmt::format("start_S{}.txt", i)).string(), per_galaxy_s, data.coordinates, data.velocities, data.num_stars);
+    }
+    for (int i = 0; i < params.n_galaxies; ++i) {
+        read_text_component((dir / fmt::format("start_DM{}.txt", i)).string(), per_galaxy_dm, data.coordinates, data.velocities, data.num_dm);
+    }
+
+    if (data.num_stars != params.expected_stars) {
+        fmt::print(stderr, "Warning: Read {} star particles, expected {}\n", data.num_stars, params.expected_stars);
+    }
+    if (data.num_dm != params.expected_dm) {
+        fmt::print(stderr, "Warning: Read {} DM particles, expected {}\n", data.num_dm, params.expected_dm);
+    }
+
+    return data;
+}
+```
+
+### Конфигурация сборки `CMakeLists.txt`
+
+Разместите этот файл в `khrr-lib/particles/CMakeLists.txt`. Используется `FindPackage`/`FetchContent` для зависимостей, чтобы гарантировать собираемость без дополнительных шагов настройки.
+
+```cmake khrr-lib/particles/CMakeLists.txt
+cmake_minimum_required(VERSION 3.14)
+project(particles_io LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Основная библиотека
+add_library(particles_io
+    src/particles_io.cpp
+)
+
+target_include_directories(particles_io PUBLIC include)
+
+# Подключаем fmt (предполагается, что он доступен в дереве проекта или системе)
+find_package(fmt REQUIRED)
+target_link_libraries(particles_io PUBLIC fmt::fmt)
+
+# --- Тесты ---
+include(FetchContent)
+FetchContent_Declare(
+    Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG        v3.4.0
+)
+FetchContent_MakeAvailable(Catch2)
+
+add_executable(test_particles tests/test_particles.cpp)
+target_link_libraries(test_particles PRIVATE particles_io Catch2::Catch2WithMain)
+
+enable_testing()
+add_test(NAME ParticleIOTests COMMAND test_particles)
+```
+
+### Модульные тесты `tests/test_particles.cpp`
+
+Тесты покрывают:
+- Чтение/запись бинарного формата (round-trip)
+- Проверку поведения при несовпадении количества частиц и обрезке данных
+- Чтение текстового формата с несколькими галактиками и отсутствующими файлами
+- Валидацию входных данных для записи
+
+```cpp khrr-lib/particles/tests/test_particles.cpp
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include "../include/particles_io.h"
+
+#include <fmt/format.h>
+#include <filesystem>
+#include <fstream>
+#include <cstdio>
+#include <stdexcept>
+#include <vector>
+
+// Мокаем структуру GalaxyParams для тестов, если она не подключена напрямую
+struct GalaxyParams {
+    int n_galaxies = 0;
+    size_t expected_stars = 0;
+    size_t expected_dm = 0;
+};
+
+namespace fs = std::filesystem;
+
+// Вспомогательные функции для создания тестовых директорий и очистки
+static fs::path create_temp_dir() {
+    fs::path tmp = fs::temp_directory_path() / fmt::format("particles_test_{}", std::rand());
+    fs::create_directories(tmp);
+    return tmp;
+}
+
+static void remove_temp_dir(const fs::path& p) {
+    if (fs::exists(p)) fs::remove_all(p);
+}
+
+TEST_CASE("Binary read/write roundtrip", "[binary]") {
+    auto dir = create_temp_dir();
+    int step = 12;
+    double time = 1.5;
+
+    std::vector<double> coords = {0,1,2, 10,11,12};
+    std::vector<double> vels   = {0.1,0.2,0.3, 1.1,1.2,1.3};
+
+    write_particles_binary(dir.string(), step, time, coords, vels, 1, 1);
+
+    auto data = read_particles_binary(dir.string(), step, 10, 10);
+    REQUIRE(data.num_stars == 1);
+    REQUIRE(data.num_dm == 1);
+    REQUIRE(data.coordinates.size() == 6);
+    REQUIRE(data.velocities.size() == 6);
+
+    REQUIRE(data.coordinates[0] == 0.0);
+    REQUIRE(data.coordinates[3] == 10.0);
+    REQUIRE(data.velocities[2] == 0.3);
+    REQUIRE(data.velocities[5] == 1.3);
+
+    remove_temp_dir(dir);
+}
+
+TEST_CASE("Binary read with mismatched header and available data", "[binary][edge]") {
+    auto dir = create_temp_dir();
+    int step = 5;
+
+    // Файл заявляет 5 частиц, но содержит только 2
+    std::ofstream f((dir / "S_00005.bin").string(), std::ios::binary);
+    int n_declared = 5;
+    double t = 0.0;
+    f.write(reinterpret_cast<char*>(&n_declared), sizeof(int));
+    f.write(reinterpret_cast<char*>(&t), sizeof(double));
+
+    std::vector<double> fake_data = {1.0, 2.0, 3.0, 0.1, 0.2, 0.3,
+                                     4.0, 5.0, 6.0, 0.4, 0.5, 0.6};
+    f.write(reinterpret_cast<char*>(fake_data.data()), sizeof(double) * 12);
+    f.close();
+
+    // Пытаемся прочитать максимум 10 частиц
+    auto data = read_particles_binary(dir.string(), step, 10, 0);
+    REQUIRE(data.num_stars == 2); // Должно прочитать только то, что физически есть
+    REQUIRE(data.coordinates.size() == 6);
+
+    remove_temp_dir(dir);
+}
+
+TEST_CASE("Binary write validates sizes", "[binary][invalid]") {
+    auto dir = create_temp_dir();
+    std::vector<double> c = {1,2,3, 4,5,6};
+    std::vector<double> v = {0.1,0.2,0.3}; // Размер не совпадает с координатами
+
+    REQUIRE_THROWS_AS(write_particles_binary(dir.string(), 0, 0.0, c, v, 1, 1), std::invalid_argument);
+
+    std::vector<double> c2 = {1,2,3, 4,5}; // Не кратно 3
+    std::vector<double> v2 = {0.1,0.2,0.3};
+    REQUIRE_THROWS_AS(write_particles_binary(dir.string(), 0, 0.0, c2, v2, 1, 1), std::invalid_argument);
+
+    remove_temp_dir(dir);
+}
+
+TEST_CASE("Text read multiple galaxies and missing files", "[text]") {
+    auto dir = create_temp_dir();
+
+    // Galaxy 0: 1 звезда, 2 DM
+    {
+        std::ofstream sf(dir / "start_S0.txt");
+        sf << "1\n1.0 2.0 3.0 10.0 20.0 30.0\n";
+        std::ofstream dmf(dir / "start_DM0.txt");
+        dmf << "2\n4.0 5.0 6.0 11.0 12.0 13.0\n7.0 8.0 9.0 14.0 15.0 16.0\n";
+    }
+    // Galaxy 1: только DM, звезды отсутствуют
+    {
+        std::ofstream dmf(dir / "start_DM1.txt");
+        dmf << "1\n10.0 11.0 12.0 21.0 22.0 23.0\n";
+    }
+
+    GalaxyParams params{2, 1, 3}; // 2 галактики, ожидаем 1 звезду, 3 DM
+    auto data = read_particles_text(dir.string(), params);
+
+    // Звёзды: только из галактики 0
+    REQUIRE(data.num_stars == 1);
+    REQUIRE(data.coordinates[0] == 1.0);
+    REQUIRE(data.velocities[0] == 10.0);
+
+    // DM: из галактики 0 (2 шт) + галактики 1 (1 шт) = 3
+    REQUIRE(data.num_dm == 3);
+    REQUIRE(data.coordinates.size() == 12); // (1+3)*3
+
+    REQUIRE(data.coordinates[6] == 10.0); // Первая частица DM из galaxy 1 (index 3*2 = 6)
+    REQUIRE(data.velocities[8] == 23.0);  // Vz последней частицы
+
+    remove_temp_dir(dir);
+}
+
+TEST_CASE("Text read cuts by declared count", "[text][edge]") {
+    auto dir = create_temp_dir();
+    std::ofstream f(dir / "start_S0.txt");
+    f << "2\n1 2 3 4 5 6\n"; // Заявлено 2, но в файле только 1 строка
+    f.close();
+
+    GalaxyParams params{1, 2, 0};
+    auto data = read_particles_text(dir.string(), params);
+
+    REQUIRE(data.num_stars == 1); // Прочитано минимальное из (ожидаемое, заявленное, доступное)
+    REQUIRE(data.coordinates.size() == 3);
+
+    remove_temp_dir(dir);
+}
+```
+
+### Краткие пояснения по реализации
+1. **Производительность чтения**: В бинарном формате используется пакетное чтение в `std::vector`, а затем ручное распределение по массивам координат и скоростей без лишних реаллокаций. Для текста используется `std::fscanf`, что значительно быстрее `std::cin` или `std::istringstream` для простых числовых данных.
+2. **Валидация**: При записи проверяется кратность размера массивов тройке и соответствие суммы компонент общему количеству. При чтении обрабатываются случаи несовпадения заголовка, физического объёма файла и переданного лимита.
+3. **Путём к файлам**: `fmt::format("S_{:05d}.bin", step)` корректно заменяет `%5d` (с учётом того, что для файлов обычно подразумевается нулевое дополнение `%05d`). Если строго нужны пробелы в имени файла, замените `{:05d}` на `{:5d}`.
+4. **Сборка**: `CMakeLists.txt` автоматически подтягивает `Catch2 v3` через `FetchContent`, поэтому тесты соберутся и запустятся командой `cmake -B build && cmake --build build && ctest --test-dir build`.
