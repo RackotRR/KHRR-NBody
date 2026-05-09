@@ -1234,7 +1234,6 @@ void run() {
 	real tsave = 0.0;
 	real dtsave = 0.0;
 	real dtgrav=0.001, tgrav;
-	real Mh, a, Rh, Mb, b, Rb, eps2;
 	int i_cont = 0; // iteration to continue from
 	real K_m, K_r;
 
@@ -1287,48 +1286,15 @@ void run() {
 		auto gr_par_path_str = gr_par_path.string();
 		FILE* outf = fopen(gr_par_path_str.c_str(), "r");
 		memset(temp, 0, sizeof(temp));
-		fscanf(outf, "%lf  %[^\n]", &Mh, temp);
-		fscanf(outf, "%lf  %[^\n]", &a, temp);
-		fscanf(outf, "%lf  %[^\n]", &Rh, temp);
-		fscanf(outf, "%lf  %[^\n]", &Mb, temp);
-		fscanf(outf, "%lf  %[^\n]", &b, temp);
-		fscanf(outf, "%lf  %[^\n]", &Rb, temp);
-		fscanf(outf, "%lf  %[^\n]", &eps2, temp);
 		fscanf(outf, "%lf  %[^\n]", &dtgrav, temp);
 		fscanf(outf, "%lf  %[^\n]", &K_m, temp);    // K_m = Md/(10^{10}*Msun)
 		fscanf(outf, "%lf  %[^\n]", &K_r, temp);    // K_r = L_r / 10 кпк
 		fclose(outf);
-		printf("Mh\t= %lf\n", Mh);
-		printf("a\t= %lf\n", a);
-		printf("Rh\t= %lf\n", Rh);
-		printf("Mb\t= %lf\n", Mb);
-		printf("b\t= %lf\n", b);
-		printf("Rb\t= %lf\n", Rb);
-		printf("eps\t= %lf\n", eps2);
-		eps2 *= eps2;
-		printf("eps2\t= %lf\n", eps2);
 		printf("dtgrav\t= %lf\n", dtgrav);
 	}
 
 	const int is_grav = (int)(dtsave / dtgrav + 0.5); // in-frame iterations max (between saves)
 	int it_grav = 0; // in-frame iterations (between saves)
-
-	const real Rh2 = 3.0*Rh;
-	const real rcore1 = Rh / a;
-	const real rbcore1 = 1.0 / b;
-	const real rbcore2 = rbcore1 * rbcore1;
-	const real root1 = sqrt(1.0 + (Rb*Rb)*rbcore2);
-	const real con = Mh / (rcore1 - atan(rcore1));
-	const real const1 = Mb / (b*log(Rb*rbcore1 + root1) - Rb / root1);
-	const real c_phi_h = con / a*(0.5*log(Rh2*Rh2 / a / a + 1.0) + atan(Rh2 / a)*a / Rh2) + Mh / Rh2;
-	const real c_phi_b = Mb / Rb - const1*log(Rb / b + root1) / Rb;
-	const real Mh_inf = Mh * (Rh2 / a - atan(Rh2 / a)) / (rcore1 - atan(rcore1));
-
-	printf("*****Rh2 = %g \n", Rh2);
-	printf("*****con = %g \n", con);
-	printf("*****const1 = %g \n", const1);
-	printf("*****c_phi_h = %g \n", c_phi_h);
-	printf("*****c_phi_b = %g \n", c_phi_b);
 
 	enum class NBodySolver {
 		Nbody,
@@ -1415,19 +1381,6 @@ void run() {
 
 	d.Ns = N_star;
 	d.NN = N_total;
-	d.Mh = Mh;
-	d.Mh_inf = Mh_inf;
-	d.a = a;
-	d.Rh = Rh;
-	d.Mb = Mb;
-	d.b = b;
-	d.Rb = Rb;
-	d.Rh2 = Rh2;
-	d.con = con;
-	d.const1 = const1;
-	d.c_phi_h = c_phi_h;
-	d.c_phi_b = c_phi_b;
-	d.eps2 = eps2;
 	CuCopyToSymbol(d, dd, ToDevice);
 
 	wave_eq_data.domainMin = _domain_min;

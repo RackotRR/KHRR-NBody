@@ -39,19 +39,6 @@ constexpr T intlog2(T size) {
 struct DataBlock{
 	int		Ns;
 	int		NN;
-	real	Mh;
-	real	Mh_inf;
-	real    a;
-	real    Rh;
-	real    Mb;
-	real    b;
-	real    Rb;
-	real    Rh2;
-	real    con;
-	real    const1;
-	real    c_phi_h;
-	real    c_phi_b;
-	real    eps2;
 };
 
 struct WaveEqData {

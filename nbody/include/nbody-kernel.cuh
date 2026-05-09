@@ -4,41 +4,6 @@
 //Author: S.S. Khrapov
 //Parallel Nbody Code OpenMP-CUDA 4GPU
 
-//-----device function-----
-__device__ real3 dev_fex(real3 p, real t){
-	real3 f;
-	real rr, rr3, forcehalo, rrbcore1, root1, forceblg1, forcesph, rrcore;
-
-	rr = sqrt(
-		p.x*p.x +
-		p.y*p.y +
-		p.z*p.z
-	);
-
-	if (rr > 0.0) {
-		rr3 = rr*rr*rr;
-		rrcore = rr / dd.a;
-		rrbcore1 = rr / dd.b;
-		root1 = sqrt(1.0 + rrbcore1*rrbcore1);
-
-		//--Halo--
-		if (rr<dd.Rh2) forcehalo = -dd.con *(rrcore - atan(rrcore)) / rr3;
-		else  forcehalo = -dd.Mh_inf / rr3;
-		//--Bulge--
-		if (rr<dd.Rb) forceblg1 = -dd.const1*(dd.b*log(rrbcore1 + root1) - rr / root1) / rr3;
-		else  forceblg1 = -dd.Mb / rr3;
-
-		forcesph = forceblg1 + forcehalo;
-		f.x = forcesph * p.x;
-		f.y = forcesph * p.y;
-		f.z = forcesph * p.z;
-	}
-	else {
-		f = make_real3(0.0, 0.0, 0.0);
-	}
-	return f;
-}
-
 //-----Phi_Nbody kernel--------
 __global__ void PHI_kernel(
 	real* phi,
@@ -195,12 +160,11 @@ __global__ void kernelNbody_integTime(
 	real3 v = vel[i];
 	real3 r = pos[i];
 	real3 vt;
-	real3 f, fex;
+	real3 f;
 
-	fex = dev_fex(r, t);
-	f.x = acc[i].x + fex.x;
-	f.y = acc[i].y + fex.y;
-	f.z = acc[i].z + fex.z;
+	f.x = acc[i].x;
+	f.y = acc[i].y;
+	f.z = acc[i].z;
 
 	//----predictor-------------------- q = q(t), q_t = q(t+dt) , dt = dt
 	if (istep == 0) {
