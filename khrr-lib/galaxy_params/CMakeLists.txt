@@ -12,6 +12,7 @@ target_include_directories(khrr_galaxy_params
 
 target_link_libraries(khrr_galaxy_params
     PRIVATE
+    khrr_common
     range-v3::range-v3
     fmt::fmt
 )
