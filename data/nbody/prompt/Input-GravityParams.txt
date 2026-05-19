@@ -1,0 +1,101 @@
+Ты занимаешься разработкой солвера для моделирования галактик методами N-body и частиц на сетке с распараллеливанием на CUDA.
+В качестве системы сборки используй CMake.
+Используй C++. Где можно - используй ленивые вычисления с библиотекой range-v3.
+
+Текущая задача - создать методы чтения входных данных.
+В частности, некоторых параметров для моделирования:
+
+Входной файл "__gr_par.ini" имеет вид:
+0.0 	--- Mh (mass Halo)
+0.3333 	--- a
+1.0000 	--- Rh
+0.0 	--- Mb (mass Bulge)
+0.0431 	--- b
+0.2000 	--- Rb
+0.004 	--- eps (grav soft.)
+0.002 	--- dtgrav
+3.720 	--- K_m
+0.900 	--- K_r
+
+Используй функции из khrr_parser.h для чтения.
+Пример их использования:
+    Чтение строк файла и удаление комментариев:
+    std::vector<std::string> lines = khrr_parser::read_file(filepath);
+
+    Разбор строки:
+    Здесь g.N_s, g.N_dm - это значения типа size_t, которые мы читаем из файла;
+    lines[base+1] - это текущая строка. В твоём случае будет проще, значение в каждой строке одно.
+    std::tie(g.N_s, g.N_dm) = parse_tuple_values<std::size_t, std::size_t>(lines[base + 1]);
+
+Чтобы понять, что означают параметры, изучи функцию dev_fex:
+
+
+//-----device function-----
+__device__ real3 dev_fex(real3 p, real t){
+	real3 f;
+	real rr, rr3, forcehalo, rrbcore1, root1, forceblg1, forcesph, rrcore;
+
+	rr = sqrt(
+		p.x*p.x +
+		p.y*p.y +
+		p.z*p.z
+	);
+
+	if (rr > 0.0) {
+		rr3 = rr*rr*rr;
+		rrcore = rr / dd.a;
+		rrbcore1 = rr / dd.b;
+		root1 = sqrt(1.0 + rrbcore1*rrbcore1);
+
+		//--Halo--
+		if (rr<dd.Rh2) forcehalo = -dd.con *(rrcore - atan(rrcore)) / rr3;
+		else  forcehalo = -dd.Mh_inf / rr3;
+		//--Bulge--
+		if (rr<dd.Rb) forceblg1 = -dd.const1*(dd.b*log(rrbcore1 + root1) - rr / root1) / rr3;
+		else  forceblg1 = -dd.Mb / rr3;
+
+		forcesph = forceblg1 + forcehalo;
+		f.x = forcesph * p.x;
+		f.y = forcesph * p.y;
+		f.z = forcesph * p.z;
+	}
+	else {
+		f = make_real3(0.0, 0.0, 0.0);
+	}
+	return f;
+}
+
+и подготовку переменных для функции dev_fex:
+
+	const real Rh2 = 3.0*Rh;
+	const real rcore1 = Rh / a;
+	const real rbcore1 = 1.0 / b;
+	const real rbcore2 = rbcore1 * rbcore1;
+	const real root1 = sqrt(1.0 + (Rb*Rb)*rbcore2);
+	const real con = Mh / (rcore1 - atan(rcore1));
+	const real const1 = Mb / (b*log(Rb*rbcore1 + root1) - Rb / root1);
+	const real c_phi_h = con / a*(0.5*log(Rh2*Rh2 / a / a + 1.0) + atan(Rh2 / a)*a / Rh2) + Mh / Rh2;
+	const real c_phi_b = Mb / Rb - const1*log(Rb / b + root1) / Rb;
+	const real Mh_inf = Mh * (Rh2 / a - atan(Rh2 / a)) / (rcore1 - atan(rcore1));
+
+Что это такое можешь написать, чтобы я удостоверился, что ты понимаешь смысл.
+
+Предварительно создай файл с модульными тестами для функций чтения параметров гравитации.
+Тесты должны покрывать возможные невалидные случаи, чтобы избежать падений и ошибок в будущем.
+Напиши код для чтения такого файла: создай структуру данных и функции для чтения - тебе нужно будет создать заголовочный файл с подробной документацией и файл реализации.
+
+
+Измени тесты так, чтобы вместо GTest использовался Catch2 (выведи только файл test_grav_params.cpp).
+
+
+
+Сделай аналогичный модуль для параметров моделирования:
+
+Этот файл называется "__start_nbody.ini", и он содержит следующие данные:
+0 	--- i_cont
+30.00 	--- tmax
+0.010 	--- dt_save
+
+i_cont - это итерация, с которой начнётся расчёт (солвер попробует будет искать соответсвующий файл с частицами)
+tmax - это максимальное время моделирования (в безразмерных единицах)
+dt_save - это время моделирования, через которое следует делать сохранения

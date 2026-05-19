@@ -29,19 +29,14 @@ std::tuple<Ts...> parse_tuple_values(std::string_view line) {
     std::tuple<Ts...> result;
 
     // Пытаемся прочитать все значения
-    bool success = std::apply(
-        [&](auto&... elements) -> bool {
-            if constexpr (sizeof...(elements) == 1) {
-                return (iss >> ... >> elements).good();
-            }
-            else {
-                return ((iss >> elements) && ...);
-            }
+    std::apply(
+        [&](auto&... elements) {
+            (iss >> ... >> elements);
         },
         result
     );
 
-    if (!success) {
+    if (!iss) {
         throw std::runtime_error("Failed to parse expected values from line");
     }
 
@@ -54,6 +49,13 @@ std::tuple<Ts...> parse_tuple_values(std::string_view line) {
     return result;
 }
 
-std::vector<std::string> read_file(const std::string& filepath);
+/// Извлекает строго одно значение заданного типа из строки.
+template<typename T>
+inline T parse_single(std::string_view line) {
+    return std::get<0>(khrr_parser::parse_tuple_values<T>(line));
+}
 
-} // namespace khrr_galaxy_params
+/// Читает файл в вектор строк по указанному пути
+std::vector<std::string> read_file(std::string_view filepath);
+
+} // namespace khrr_parser

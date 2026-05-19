@@ -7,14 +7,19 @@ namespace khrr_parser {
 
 std::string clean_line(std::string line) {
     if (auto pos = line.find("----"); pos != std::string::npos) line.erase(pos);
+    if (auto pos = line.find("---"); pos != std::string::npos) line.erase(pos);
     if (auto pos = line.find('#'); pos != std::string::npos) line.erase(pos);
     line.erase(0, line.find_first_not_of(" \t\r\n"));
     line.erase(line.find_last_not_of(" \t\r\n") + 1);
     return line;
 }
 
-std::vector<std::string> read_file(const std::string& filepath) {
-    std::ifstream file(filepath);
+std::vector<std::string> read_file(std::string_view filepath) {
+    if (filepath.empty()) {
+        throw std::runtime_error("Empty filepath passed to read_file");
+    }
+
+    std::ifstream file(filepath.data());
     if (!file.is_open()) {
         throw std::runtime_error(fmt::format("Cannot open configuration file: {}", filepath));
     }
