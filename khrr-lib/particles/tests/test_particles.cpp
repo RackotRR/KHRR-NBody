@@ -5,7 +5,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include "particle_io.h"
-#include "double3.h"
+#include <khrr_types.h>
 
 #include <filesystem>
 #include <stdexcept>
@@ -20,7 +20,7 @@ std::string get_temp_test_dir() {
 }
 
 TEST_CASE("double3 structure defaults", "[double3]") {
-    khrr_particles::double3 v{1.0, 2.0, 3.0};
+    khrr_common::real3 v{1.0, 2.0, 3.0};
     REQUIRE(v.x == 1.0);
     REQUIRE(v.y == 2.0);
     REQUIRE(v.z == 3.0);
@@ -31,10 +31,10 @@ TEST_CASE("Binary save and load - normal", "[binary]") {
     fs::create_directories(dir);
 
     // Data: 2 Stars, 1 DM
-    std::vector<khrr_particles::double3> s_pos = {{0,1,2}, {3,4,5}};
-    std::vector<khrr_particles::double3> s_vel = {{0.1,1.1,2.1}, {3.1,4.1,5.1}};
-    std::vector<khrr_particles::double3> dm_pos = {{6,7,8}};
-    std::vector<khrr_particles::double3> dm_vel = {{6.6,7.7,8.8}};
+    std::vector<khrr_common::real3> s_pos = {{0,1,2}, {3,4,5}};
+    std::vector<khrr_common::real3> s_vel = {{0.1,1.1,2.1}, {3.1,4.1,5.1}};
+    std::vector<khrr_common::real3> dm_pos = {{6,7,8}};
+    std::vector<khrr_common::real3> dm_vel = {{6.6,7.7,8.8}};
 
     // Save
     REQUIRE_NOTHROW(khrr_particles::save_binary(dir, 10, 123.45, s_pos, s_vel, dm_pos, dm_vel));
@@ -69,8 +69,8 @@ TEST_CASE("Binary load - header mismatch and missing file", "[binary]") {
     std::string dir = get_temp_test_dir() + "/bin2";
     fs::create_directories(dir);
 
-    std::vector<khrr_particles::double3> s_pos = {{10,20,30}};
-    std::vector<khrr_particles::double3> s_vel = {{0.1,0.2,0.3}};
+    std::vector<khrr_common::real3> s_pos = {{10,20,30}};
+    std::vector<khrr_common::real3> s_vel = {{0.1,0.2,0.3}};
 
     // Save 1 Star
     REQUIRE_NOTHROW(khrr_particles::save_binary(dir, 5, 0.0, s_pos, s_vel, {}, {}));

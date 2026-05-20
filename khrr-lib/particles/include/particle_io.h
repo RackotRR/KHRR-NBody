@@ -5,24 +5,29 @@
 #include <cstddef>
 #include <cstdint>
 #include <galaxy_params.h>
-#include "double3.h"
+#include <khrr_types.h>
 
 namespace khrr_particles {
+
+using khrr_common::real;
+using khrr_common::real3;
 
 /**
  * @brief Container holding particle positions, velocities, and component counts.
  * Data is stored in a Structure of Arrays-like manner via separate vectors.
  */
 struct ParticleData {
-    std::vector<double3> positions;
-    std::vector<double3> velocities;
+    std::vector<real3> positions;
+    std::vector<real3> velocities;
+    std::vector<real> masses;
+    std::vector<real> eps2; // softening
     std::size_t n_stars = 0;
     std::size_t n_dm   = 0;
 };
 
 /**
  * @brief Saves particle snapshot to binary format.
- * @details Writes S_%5d.bin and DM_%5d.bin files with headers (int count, double time)
+ * @details Writes S_%5d.bin and DM_%5d.bin files with headers (int count, real time)
  * followed by continuous [x y z vx vy vz] data.
  *
  * @param directory    Output directory path.
@@ -36,11 +41,11 @@ struct ParticleData {
 void save_binary(
     const std::string& directory,
     int step,
-    double time,
-    const std::vector<double3>& star_pos,
-    const std::vector<double3>& star_vel,
-    const std::vector<double3>& dm_pos,
-    const std::vector<double3>& dm_vel
+    real time,
+    const std::vector<real3>& star_pos,
+    const std::vector<real3>& star_vel,
+    const std::vector<real3>& dm_pos,
+    const std::vector<real3>& dm_vel
 );
 
 /**

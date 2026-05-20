@@ -12,6 +12,7 @@ target_include_directories(khrr_particles
 target_link_libraries(khrr_particles
     PUBLIC
     khrr_galaxy_params
+    khrr_common
     PRIVATE
     fmt::fmt
 )

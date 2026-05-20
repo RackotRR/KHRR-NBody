@@ -1,5 +1,5 @@
 #include "particle_io.h"
-#include "double3.h"
+#include <khrr_types.h>
 
 #include <fmt/format.h>
 #include <cstdio>
@@ -18,8 +18,8 @@ namespace khrr_particles {
         int step,
         const std::string& component_prefix,
         std::size_t expected_count,
-        std::vector<double3>& out_pos,
-        std::vector<double3>& out_vel,
+        std::vector<real3>& out_pos,
+        std::vector<real3>& out_vel,
         std::size_t& out_read_count
     )
     {
@@ -31,11 +31,11 @@ namespace khrr_particles {
             return;
         }
 
-        // Read header: [int count][double time]
+        // Read header: [int count][real time]
         int header_count_int = 0;
-        double time = 0.0;
+        real time = 0.0;
         size_t read_h1 = fread(&header_count_int, sizeof(int), 1, f);
-        size_t read_h2 = fread(&time, sizeof(double), 1, f);
+        size_t read_h2 = fread(&time, sizeof(real), 1, f);
 
         if (read_h1 != 1 || read_h2 != 1) {
             std::cerr << "[Warning] Failed to read header from " << path << "\n";
@@ -58,7 +58,7 @@ namespace khrr_particles {
         // Buffer for reading chunks (6 doubles per particle)
         // 48 bytes per particle. 100k particles = ~4.8MB buffer.
         const std::size_t CHUNK_PARTICLES = 100000;
-        std::vector<double> buffer(CHUNK_PARTICLES * 6);
+        std::vector<real> buffer(CHUNK_PARTICLES * 6);
 
         std::size_t total_read = 0;
         // Reserve memory to avoid reallocations
@@ -69,7 +69,7 @@ namespace khrr_particles {
             std::size_t to_read_now = std::min(CHUNK_PARTICLES, limit - total_read);
             std::size_t items_to_read = to_read_now * 6;
 
-            std::size_t items_read = fread(buffer.data(), sizeof(double), items_to_read, f);
+            std::size_t items_read = fread(buffer.data(), sizeof(real), items_to_read, f);
 
             if (items_read == 0) break; // EOF or error
 
@@ -102,11 +102,11 @@ namespace khrr_particles {
     void save_binary(
         const std::string& directory,
         int step,
-        double time,
-        const std::vector<double3>& star_pos,
-        const std::vector<double3>& star_vel,
-        const std::vector<double3>& dm_pos,
-        const std::vector<double3>& dm_vel
+        real time,
+        const std::vector<real3>& star_pos,
+        const std::vector<real3>& star_vel,
+        const std::vector<real3>& dm_pos,
+        const std::vector<real3>& dm_vel
     )
     {
         if (star_pos.size() != star_vel.size()) {
@@ -121,27 +121,27 @@ namespace khrr_particles {
 
         auto write_component = [&](
             const std::string& prefix,
-            const std::vector<double3>& pos,
-            const std::vector<double3>& vel
+            const std::vector<real3>& pos,
+            const std::vector<real3>& vel
         ) {
             std::string filepath = fmt::format("{}/{}_{:5d}.bin", directory, prefix, step);
             FILE* f = fopen(filepath.c_str(), "wb");
             if (!f) throw std::runtime_error("Cannot open " + filepath);
 
             int n = static_cast<int>(pos.size());
-            if (fwrite(&n, sizeof(int), 1, f) != 1 || fwrite(&time, sizeof(double), 1, f) != 1) {
+            if (fwrite(&n, sizeof(int), 1, f) != 1 || fwrite(&time, sizeof(real), 1, f) != 1) {
                 fclose(f);
                 throw std::runtime_error("Failed to write header for " + filepath);
             }
 
             // Write [x y z vx vy vz] blocks
             for (std::size_t i = 0; i < pos.size(); ++i) {
-                fwrite(&pos[i].x, sizeof(double), 1, f);
-                fwrite(&pos[i].y, sizeof(double), 1, f);
-                fwrite(&pos[i].z, sizeof(double), 1, f);
-                fwrite(&vel[i].x, sizeof(double), 1, f);
-                fwrite(&vel[i].y, sizeof(double), 1, f);
-                fwrite(&vel[i].z, sizeof(double), 1, f);
+                fwrite(&pos[i].x, sizeof(real), 1, f);
+                fwrite(&pos[i].y, sizeof(real), 1, f);
+                fwrite(&pos[i].z, sizeof(real), 1, f);
+                fwrite(&vel[i].x, sizeof(real), 1, f);
+                fwrite(&vel[i].y, sizeof(real), 1, f);
+                fwrite(&vel[i].z, sizeof(real), 1, f);
             }
             fclose(f);
         };
@@ -196,9 +196,9 @@ namespace khrr_particles {
             FILE* f = fopen(path.c_str(), "r");
             if (!f) return (std::size_t)0; // File missing is acceptable (e.g. DM component missing)
 
-            // Read header: [int count][double time] (matches binary format)
+            // Read header: [int count][real time] (matches binary format)
             int header_count = 0;
-            double header_time = 0.0;
+            real header_time = 0.0;
             if (fscanf(f, "%d %lf", &header_count, &header_time) != 2) {
                 std::cerr << "[Warning] Failed to read header from " << path << "\n";
                 fclose(f);
@@ -210,14 +210,14 @@ namespace khrr_particles {
                         << " particles, but expected " << expected_count << ".\n";
             }
 
-            double x, y, z, vx, vy, vz;
+            real x, y, z, vx, vy, vz;
             int ret;
             std::size_t read_count = 0;
 
             // Reserve chunk
             // We push directly to result vectors, but result might realloc.
             // Let's use temp buffer to push all at once if possible
-            std::vector<double3> temp_pos, temp_vel;
+            std::vector<real3> temp_pos, temp_vel;
             temp_pos.reserve(std::min(expected_count, (std::size_t)100000));
             temp_vel.reserve(std::min(expected_count, (std::size_t)100000));
 
