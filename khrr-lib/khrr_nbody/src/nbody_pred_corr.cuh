@@ -1,43 +1,7 @@
 #pragma once
 #include <vector_types.h>
 
-namespace khrr_nbody {
-namespace kernels  {
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Direct O(N²) gravitational acceleration with pairwise softening.
-//
-//   a_i = G · Σ_{j≠i}  m_j · (r_j − r_i) / (|r_j − r_i|² + ½(ε²_i+ε²_j))^{3/2}
-// ─────────────────────────────────────────────────────────────────────────────
-__global__ void compute_accel(
-    const double3* __restrict__ pos,
-    const double*  __restrict__ mass,
-    const double*  __restrict__ eps2,
-    double3*       __restrict__ acc,
-    int   N,
-    double G)
-{
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= N) return;
-
-    double ax = 0.0, ay = 0.0, az = 0.0;
-    const double3 ri  = pos[i];
-    const double  ei2 = eps2[i];
-
-    for (int j = 0; j < N; ++j) {
-        if (j == i) continue;
-        const double dx = pos[j].x - ri.x;
-        const double dy = pos[j].y - ri.y;
-        const double dz = pos[j].z - ri.z;
-        const double r2     = dx*dx + dy*dy + dz*dz + 0.5*(ei2 + eps2[j]);
-        const double r3inv  = rsqrt(r2 * r2 * r2);
-        const double Gmj    = G * mass[j];
-        ax += Gmj * dx * r3inv;
-        ay += Gmj * dy * r3inv;
-        az += Gmj * dz * r3inv;
-    }
-    acc[i] = {ax, ay, az};
-}
+namespace khrr_nbody::kernels {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Predictor:
@@ -95,5 +59,4 @@ __global__ void correct(
     vel_out[i] = vn1;
 }
 
-} // namespace kernels
-} // namespace khrr_nbody
+} // namespace khrr_nbody::kernels

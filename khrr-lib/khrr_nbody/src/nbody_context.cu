@@ -1,5 +1,6 @@
 #include "nbody_context.h"
-#include "nbody_kernels.cuh"
+#include "nbody_accel.cuh"
+#include "nbody_leapfrog.cuh"
 
 #include <thrust/device_vector.h>
 #include <thrust/copy.h>
@@ -61,61 +62,56 @@ struct NBodyContext::Impl {
     }
 
     // ── Acceleration evaluation ───────────────────────────────────────────────
-    void eval_accel(
-        const thrust::device_vector<double3>& pos,
-        thrust::device_vector<double3>&       acc)
-    {
-        int N       = static_cast<int>(n_total);
-        int threads = 256;
-        int blocks  = (N + threads - 1) / threads;
+    void eval_accel() {
+        const int N       = static_cast<int>(n_total);
+        // blockDim MUST equal TILE_SIZE so shared-memory cooperative load works.
+        const int threads = kernels::TILE_SIZE;
+        const int blocks  = (N + threads - 1) / threads;
 
-        kernels::compute_accel<<<blocks, threads>>>(
-            thrust::raw_pointer_cast(pos.data()),
+        kernels::compute_accel_tiled<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_pos .data()),
             thrust::raw_pointer_cast(d_mass.data()),
             thrust::raw_pointer_cast(d_eps2.data()),
-            thrust::raw_pointer_cast(acc.data()),
+            thrust::raw_pointer_cast(d_acc .data()),
             N, G);
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
-    // ── Single PC step ────────────────────────────────────────────────────────
-    void step(real dt) {
-        int N       = static_cast<int>(n_total);
-        int threads = 256;
-        int blocks  = (N + threads - 1) / threads;
+    void kick(double half_dt) {
+        const int N       = static_cast<int>(n_total);
+        const int threads = kernels::TILE_SIZE;
+        const int blocks  = (N + threads - 1) / threads;
 
-        auto* p_pos     = thrust::raw_pointer_cast(d_pos.data());
-        auto* p_vel     = thrust::raw_pointer_cast(d_vel.data());
-        auto* p_acc     = thrust::raw_pointer_cast(d_acc.data());
-        auto* p_pos_tmp = thrust::raw_pointer_cast(d_pos_tmp.data());
-        auto* p_vel_tmp = thrust::raw_pointer_cast(d_vel_tmp.data());
-        auto* p_acc_tmp = thrust::raw_pointer_cast(d_acc_tmp.data());
+        kernels::leapfrog_kick<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_vel.data()),
+            thrust::raw_pointer_cast(d_acc.data()),
+            N, half_dt);
+        CUDA_CHECK(cudaDeviceSynchronize());
+    }
+    void drift(double dt) {
+        const int N       = static_cast<int>(n_total);
+        const int threads = kernels::TILE_SIZE;
+        const int blocks  = (N + threads - 1) / threads;
 
-        // 1. Predict → d_pos_tmp, d_vel_tmp
-        kernels::predict<<<blocks, threads>>>(
-            p_pos, p_vel, p_acc,
-            p_pos_tmp, p_vel_tmp,
+        kernels::leapfrog_drift<<<blocks, threads>>>(
+            thrust::raw_pointer_cast(d_pos.data()),
+            thrust::raw_pointer_cast(d_vel.data()),
             N, dt);
         CUDA_CHECK(cudaDeviceSynchronize());
-
-        // 2. a* = f(x*) → d_acc_tmp
-        eval_accel(d_pos_tmp, d_acc_tmp);
-
-        // 3. Correct: (x_n, v_n, a_n, a*) → (d_pos_tmp, d_vel_tmp) reused as output
-        //    Note: pos_out != pos_n  (d_pos_tmp vs d_pos) ✓
-        kernels::correct<<<blocks, threads>>>(
-            p_pos, p_vel, p_acc, p_acc_tmp,
-            p_pos_tmp, p_vel_tmp,           // output (overwrite predicted)
-            N, dt);
-        CUDA_CHECK(cudaDeviceSynchronize());
-
-        // Commit corrected state
-        thrust::copy(d_pos_tmp.begin(), d_pos_tmp.end(), d_pos.begin());
-        thrust::copy(d_vel_tmp.begin(), d_vel_tmp.end(), d_vel.begin());
-
-        // 4. Recompute a_{n+1} = f(x_{n+1}) for next step seed
-        eval_accel(d_pos, d_acc);
-
+    }
+    // ── KDK Leapfrog step ─────────────────────────────────────────────────────
+    //
+    //   1. Kick:  v_{n+½} = v_n + a_n · dt/2
+    //   2. Drift: x_{n+1} = x_n + v_{n+½} · dt
+    //   3. Eval:  a_{n+1} = f(x_{n+1})          ← only ONE force eval per step
+    //   4. Kick:  v_{n+1} = v_{n+½} + a_{n+1} · dt/2
+    //
+    void step(double dt) {
+        const double half_dt = 0.5 * dt;
+        kick (half_dt);   // 1
+        drift(dt);        // 2
+        eval_accel();     // 3
+        kick (half_dt);   // 4
         sim_time += dt;
     }
 };
@@ -153,8 +149,8 @@ void NBodyContext::upload(const NBodyParticles& p)
     thrust::copy(p.masses.begin(),     p.masses.end(),     impl_->d_mass.begin());
     thrust::copy(p.eps2.begin(),       p.eps2.end(),       impl_->d_eps2.begin());
 
-    // Pre-compute a_0 so the first predict step has valid acceleration.
-    impl_->eval_accel(impl_->d_pos, impl_->d_acc);
+    // Seed a_0 so the first kick has valid accelerations.
+    impl_->eval_accel();
 
     impl_->ready = true;
 }
