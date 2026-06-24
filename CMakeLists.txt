@@ -13,6 +13,7 @@ add_subdirectory(extern)
 add_subdirectory(nbody)
 # add_subdirectory(nbody-llm)
 add_subdirectory(khrr-lib)
+add_subdirectory(khrr-solver)
 add_subdirectory(p2mesh)
 
 configure_file("${CMAKE_SOURCE_DIR}/target_dir.h.in" "${CMAKE_SOURCE_DIR}/nbody/include/target_dir.h")

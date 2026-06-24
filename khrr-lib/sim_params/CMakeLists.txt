@@ -7,12 +7,12 @@ add_library(khrr_sim_params STATIC
 )
 target_include_directories(khrr_sim_params
     PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 target_link_libraries(khrr_sim_params
     PRIVATE
-    khrr_common
+        khrr_common
 )
 set_target_properties(khrr_sim_params PROPERTIES
     CXX_STANDARD 17

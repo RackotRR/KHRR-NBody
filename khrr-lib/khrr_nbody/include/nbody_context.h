@@ -26,7 +26,7 @@ struct NBodyParticles {
 
     std::size_t size() const noexcept { return positions.size(); }
 
-    /// True iff every sub-array has the same length and n_stars+n_dm == N.
+    /// True if every sub-array has the same length and n_stars+n_dm == N.
     bool is_valid() const noexcept {
         const std::size_t n = positions.size();
         return !positions.empty()          &&
