@@ -1,6 +1,7 @@
 #include <khrr_parser.h>
 #include <stdexcept>
 #include <tuple>
+#include <spdlog/spdlog.h>
 #include "sim_params.h"
 
 namespace khrr_sim_params {
@@ -12,6 +13,7 @@ inline T parse_single(std::string_view line) {
 }
 
 SimConfig load_sim_config(std::string_view filepath) {
+    spdlog::info("load sim config");
     const auto lines = khrr_parser::read_file(std::string(filepath));
 
     if (lines.size() < 3) {
@@ -33,6 +35,9 @@ SimConfig load_sim_config(std::string_view filepath) {
         throw std::runtime_error("'dt_save' cannot exceed 'tmax'");
     }
 
+    spdlog::info("\t -- i continue = {}", i_cont);
+    spdlog::info("\t -- tmax = {}", tmax);
+    spdlog::info("\t -- dt save = {}", dt_save);
     return SimConfig{i_cont, tmax, dt_save};
 }
 

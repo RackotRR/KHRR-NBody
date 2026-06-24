@@ -14,7 +14,7 @@ target_link_libraries(khrr_galaxy_params
     PRIVATE
         khrr_common
         range-v3::range-v3
-        fmt::fmt
+        spdlog::spdlog
 )
 set_target_properties(khrr_galaxy_params PROPERTIES
     CXX_STANDARD 17

@@ -1,5 +1,10 @@
 #include "nbody_context.h"
 #include "solver-log.h"
+#include "solver-fs.h"
+
+#include <grav_params.h>
+#include <sim_params.h>
+#include <galaxy_params_reader.h>
 
 using khrr_common::real3;
 
@@ -26,18 +31,35 @@ make_particles(
 
 
 int main(void) {
-    khrr_solver::log::setup_logging();
+    try {
 
-    khrr_nbody::NBodyContext ctx;
-    ctx.upload(make_particles(4));
-    ctx.integrate(0.01, 5, 20);
+        khrr_solver::log::setup_logging();
+        auto project_path = khrr_solver::fs::get_projects_directory() / "base";
+        auto grav_params = khrr_grav_params::load_grav_config(
+            khrr_solver::fs::get_grav_params_path(project_path).string()
+        );
+        auto sim_params = khrr_sim_params::load_sim_config(
+            khrr_solver::fs::get_sim_params_path(project_path).string()
+        );
+        auto galaxy_params = khrr_galaxy_params::read_galaxy_params(
+            khrr_solver::fs::get_galaxies_params_path(project_path).string()
+        );
 
-    auto ti = ctx.timing();
-    spdlog::info("steps done: {}", ti.steps_done);
-    spdlog::info("steps total: {}", ti.steps_total);
-    spdlog::info("elapsed seconds: {}", ti.elapsed_seconds);
-    spdlog::info("avg step seconds: {}", ti.avg_step_seconds);
-    spdlog::info("estimated remaining: {}", ti.estimated_remaining);
+        khrr_nbody::NBodyContext ctx;
+        ctx.upload(make_particles(4));
+        ctx.integrate(0.01, 5, 20);
+
+        auto ti = ctx.timing();
+        spdlog::info("steps done: {}", ti.steps_done);
+        spdlog::info("steps total: {}", ti.steps_total);
+        spdlog::info("elapsed seconds: {}", ti.elapsed_seconds);
+        spdlog::info("avg step seconds: {}", ti.avg_step_seconds);
+        spdlog::info("estimated remaining: {}", ti.estimated_remaining);
+
+    }
+    catch(const std::exception& ex) {
+        spdlog::error(ex.what());
+    }
 
     return 0;
 }

@@ -2,6 +2,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <spdlog/spdlog.h>
 #include "grav_params.h"
 
 namespace khrr_grav_params {
@@ -12,6 +13,7 @@ inline double extract_double(std::string_view line) {
 }
 
 GravConfig load_grav_config(std::string_view filepath) {
+    spdlog::info("load grav config");
     const auto lines = khrr_parser::read_file(std::string(filepath));
 
     if (lines.size() < 10) {
@@ -54,6 +56,11 @@ GravConfig load_grav_config(std::string_view filepath) {
     const double c_phi_h = con / a * (0.5 * std::log(Rh2 * Rh2 / a / a + 1.0) + std::atan(Rh2 / a) * a / Rh2) + Mh / Rh2;
     const double c_phi_b = (Mb != 0.0) ? (Mb / Rb - const1 * bulge_log_term / Rb) : 0.0;
     const double Mh_inf = Mh * (Rh2 / a - std::atan(Rh2 / a)) / halo_denom;
+
+    spdlog::info("\t -- Mh = {}", Mh);
+    spdlog::info("\t -- Rh = {}", Rh);
+    spdlog::info("\t -- dtgrav = {}", dtgrav);
+    spdlog::info("\t -- eps = {}", eps);
 
     // Возврат по значению (компилятор применит RVO/move)
     return GravConfig{

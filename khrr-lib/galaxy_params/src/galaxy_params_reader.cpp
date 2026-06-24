@@ -1,7 +1,7 @@
 #include "galaxy_params.h"
 #include "galaxy_params_reader.h"
 #include <khrr_parser.h>
-#include <fmt/format.h>
+#include <spdlog/spdlog.h>
 
 #include <stdexcept>
 #include <fstream>
@@ -16,6 +16,7 @@ namespace khrr_galaxy_params {
 using khrr_parser::parse_tuple_values;
 
 SimulationParams read_galaxy_params(const std::string& filepath) {
+    spdlog::info("load galaxy params");
     std::vector<std::string> lines = khrr_parser::read_file(filepath);
 
     // Парсинг M_glx: количество элементов проверяется на этапе компиляции
@@ -31,6 +32,7 @@ SimulationParams read_galaxy_params(const std::string& filepath) {
         throw std::runtime_error(fmt::format("File contains fewer configuration lines than required for M_glx={}", M_glx));
     }
 
+    spdlog::info("galaxies count = {}", M_glx);
     for (int i = 0; i < M_glx; ++i) {
         GalaxyParams g{};
         std::size_t base = 1 + i * LINES_PER_GALAXY;
@@ -71,6 +73,13 @@ SimulationParams read_galaxy_params(const std::string& filepath) {
             throw std::runtime_error(fmt::format("Detected NaN or Inf in galaxy parameters (index {})", i));
         }
 
+        spdlog::info("\t galaxy {} (Star : Dark matter)", i);
+        spdlog::info("\t -- N = {} ({} : {})", g.N_s + g.N_dm, g.N_s, g.N_dm);
+        spdlog::info("\t -- eps = {} : {}", g.eps_s, g.eps_dm);
+        spdlog::info("\t -- mass = {} : {}", g.Mass_s, g.Mass_dm);
+        spdlog::info("\t -- alpha = {}", g.alpha_glx);
+        spdlog::info("\t -- pos = ({}, {}, {})", g.X_glx, g.Y_glx, g.Z_glx);
+        spdlog::info("\t -- vel = ({}, {}, {})", g.Vx_glx, g.Vy_glx, g.Vz_glx);
         params.galaxies.push_back(std::move(g));
     }
 

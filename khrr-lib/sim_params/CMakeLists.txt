@@ -13,6 +13,7 @@ target_include_directories(khrr_sim_params
 target_link_libraries(khrr_sim_params
     PRIVATE
         khrr_common
+        spdlog::spdlog
 )
 set_target_properties(khrr_sim_params PROPERTIES
     CXX_STANDARD 17
