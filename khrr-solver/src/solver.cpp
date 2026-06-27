@@ -5,6 +5,7 @@
 #include <grav_params.h>
 #include <sim_params.h>
 #include <galaxy_params_reader.h>
+#include <particle_io.h>
 
 using khrr_common::real3;
 
@@ -43,6 +44,10 @@ int main(void) {
         );
         auto galaxy_params = khrr_galaxy_params::read_galaxy_params(
             khrr_solver::fs::get_galaxies_params_path(project_path).string()
+        );
+        auto particles = khrr_particles::load_text_initial(
+            khrr_solver::fs::get_project_ini_directory(project_path).string(),
+            galaxy_params
         );
 
         khrr_nbody::NBodyContext ctx;

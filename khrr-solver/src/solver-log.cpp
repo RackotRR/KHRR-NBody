@@ -1,6 +1,6 @@
 #include "solver-log.h"
 #include "solver-fs.h"
-#include <spdlog/sinks/rotating_file_sink.h>
+#include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/async.h>
 #include <fmt/format.h>
@@ -8,6 +8,22 @@
 #include <iostream>
 
 namespace khrr_solver::log {
+
+    std::string get_time_string(void) {
+        auto now = std::chrono::system_clock::now();
+        auto time_t_now = std::chrono::system_clock::to_time_t(now);
+        std::tm tm_now;
+#ifdef _WIN32
+        localtime_s(&tm_now, &time_t_now);
+#else
+        localtime_r(&time_t_now, &tm_now);
+#endif
+
+        char buffer[80];
+        std::strftime(buffer, sizeof(buffer), "%Y-%m-%d_%H-%M-%S", &tm_now);
+
+        return buffer;
+    }
 
     void setup_logging() {
         try {
@@ -19,14 +35,20 @@ namespace khrr_solver::log {
             console_sink->set_level(spdlog::level::info);
             console_sink->set_pattern("[%H:%M:%S] [%^%l%$] %v");
 
-            // Файловый sink с ротацией (макс 5 файлов по 10 MB)
+            // Файловый sink с уникальным именем для каждого запуска
             auto log_dir = khrr_solver::fs::get_log_directory();
             khrr_solver::fs::create_directory_if_not_exists(log_dir);
-            auto log_file = log_dir / fmt::format("{}.log", khrr_solver::fs::APP_NAME);
-            auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-                log_file.string(),
-                1024 * 1024 * 10,  // 10 MB
-                5                  // 5 файлов
+
+            // Генерируем уникальное имя файла с временной меткой
+            std::string filename = fmt::format(
+                "{}_{}.log",
+                khrr_solver::fs::APP_NAME,
+                get_time_string()
+            );
+            auto log_file = log_dir / filename;
+
+            auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+                log_file.string()
             );
             file_sink->set_level(spdlog::level::trace);
             file_sink->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%L] %v");

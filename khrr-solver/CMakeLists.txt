@@ -21,6 +21,7 @@ target_link_libraries(khrr_solver
         khrr_grav_params
         khrr_sim_params
         khrr_galaxy_params
+        khrr_particles
         spdlog::spdlog
         fmt::fmt
 )

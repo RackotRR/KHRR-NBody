@@ -11,6 +11,10 @@ namespace khrr_solver::fs {
 
     std::filesystem::path get_projects_directory();
 
+    std::filesystem::path get_project_ini_directory(
+        const std::filesystem::path& project_dir
+    );
+
     std::filesystem::path get_grav_params_path(
         const std::filesystem::path& project_dir
     );

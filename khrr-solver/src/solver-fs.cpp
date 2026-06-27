@@ -37,26 +37,34 @@ namespace khrr_solver::fs {
         return get_app_directory() / "projects";
     }
 
+    std::filesystem::path get_project_ini_directory(
+        const std::filesystem::path& project_dir
+    )
+    {
+        return project_dir / "ini";
+    }
+
     std::filesystem::path get_grav_params_path(
         const std::filesystem::path& project_dir
     )
     {
-        return project_dir / "ini" / "__gr_par.ini";
+        return get_project_ini_directory(project_dir) / "__gr_par.ini";
     }
 
     std::filesystem::path get_sim_params_path(
         const std::filesystem::path& project_dir
     )
     {
-        return project_dir / "ini" / "__start_nbody.ini";
+        return get_project_ini_directory(project_dir) / "__start_nbody.ini";
     }
 
     std::filesystem::path get_galaxies_params_path(
         const std::filesystem::path& project_dir
     )
     {
-        return project_dir / "ini" / "__start_galaxies.ini";
+        return get_project_ini_directory(project_dir) / "__start_galaxies.ini";
     }
+
 
     void create_directory_if_not_exists(const std::filesystem::path& path) {
         try {
