@@ -9,14 +9,14 @@ namespace fs = std::filesystem;
 
 auto read_sample_galaxy_params(fs::path path) {
 
-    khrr_galaxy_params::SimulationParams sim_params = khrr_galaxy_params::read_galaxy_params(
+    khrr_galaxy_params::GalaxiesParams galaxies_params = khrr_galaxy_params::read_galaxy_params(
         path.string()
     );
 
     std::cout << "read galaxy params:" << std::endl;
-    std::cout << "galaxies count: " << sim_params.M_glx << std::endl;
+    std::cout << "galaxies count: " << galaxies_params.M_glx << std::endl;
     std::cout << "galaxies: " << std::endl;
-    for (auto& galaxy : sim_params.galaxies) {
+    for (auto& galaxy : galaxies_params.galaxies) {
         std::cout << "\t galaxy id: " << galaxy.k_glx << std::endl;
         std::cout << "\t N stars: " << galaxy.N_s << std::endl;
         std::cout << "\t N dark matter: " << galaxy.N_dm << std::endl;
@@ -30,11 +30,11 @@ auto read_sample_galaxy_params(fs::path path) {
         std::cout << std::endl;
     }
 
-    return sim_params;
+    return galaxies_params;
 }
 
-auto read_particles_text(const khrr_galaxy_params::SimulationParams& sim_params) {
-    auto particles_data = khrr_particles::load_text_initial(fs::current_path().string(), sim_params);
+auto read_particles_text(const khrr_galaxy_params::GalaxiesParams& galaxies_params) {
+    auto particles_data = khrr_particles::load_text_initial(fs::current_path().string(), galaxies_params);
 
     std::cout << "star particles loaded: " << particles_data.n_stars << std::endl;
     std::cout << "dm particles loaded: " << particles_data.n_dm << std::endl;
@@ -51,7 +51,7 @@ auto read_particles_text(const khrr_galaxy_params::SimulationParams& sim_params)
 
     return 0;
 }
-auto read_particles_bin(const khrr_galaxy_params::SimulationParams& sim_params) {
+auto read_particles_bin(const khrr_galaxy_params::GalaxiesParams& galaxies_params) {
     auto particles_data = khrr_particles::load_binary(
         fs::current_path().string(),
         10,

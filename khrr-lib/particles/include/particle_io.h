@@ -72,12 +72,12 @@ ParticleData load_binary(
  * Concatenates stars first, then DM. Uses fast parsing for whitespace-separated values.
  *
  * @param directory    Directory containing text files.
- * @param sim_params   Simulation parameters defining galaxy indices and expected counts.
+ * @param galaxies_params   Galaxies parameters defining galaxy indices and expected counts.
  * @return             Concatenated ParticleData.
  */
 ParticleData load_text_initial(
     const std::string& directory,
-    const khrr_galaxy_params::SimulationParams& sim_params
+    const khrr_galaxy_params::GalaxiesParams& galaxies_params
 );
 
 } // namespace khrr_particles

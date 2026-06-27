@@ -113,7 +113,7 @@ TEST_CASE("Text load initial - multiple files", "[text]") {
     // No start_DM2.txt (should be handled gracefully)
 
     // Setup params
-    khrr_galaxy_params::SimulationParams params;
+    khrr_galaxy_params::GalaxiesParams params;
     params.M_glx = 2;
     params.galaxies.resize(2);
 
@@ -154,7 +154,7 @@ TEST_CASE("Text load initial - missing galaxy files", "[text]") {
     fs::create_directories(dir);
     // No files created
 
-    khrr_galaxy_params::SimulationParams params;
+    khrr_galaxy_params::GalaxiesParams params;
     params.M_glx = 1;
     params.galaxies.resize(1);
     params.galaxies[0].k_glx = 5;

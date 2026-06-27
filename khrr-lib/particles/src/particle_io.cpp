@@ -1,7 +1,6 @@
 #include "particle_io.h"
 #include <khrr_types.h>
 
-#include <fmt/format.h>
 #include <cstdio>
 #include <vector>
 #include <stdexcept>
@@ -9,6 +8,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+
+#include <spdlog/spdlog.h>
+#include <fmt/format.h>
 
 namespace khrr_particles {
 
@@ -175,14 +177,17 @@ namespace khrr_particles {
 
     ParticleData load_text_initial(
         const std::string& directory,
-        const khrr_galaxy_params::SimulationParams& sim_params
+        const khrr_galaxy_params::GalaxiesParams& galaxies_params
     )
     {
+        spdlog::info("load particles from txt");
+
         // Calculate rough total for reserve
         std::size_t total_est = 0;
-        for(const auto& g : sim_params.galaxies) {
+        for(const auto& g : galaxies_params.galaxies) {
             total_est += g.N_s + g.N_dm;
         }
+        spdlog::debug("particles count estimation: {}", total_est);
 
         ParticleData result;
         result.positions.reserve(total_est);
@@ -193,6 +198,9 @@ namespace khrr_particles {
             std::size_t expected_count
         ) {
             std::string path = fmt::format("{}/{}", directory, filename);
+            spdlog::info("read text file '{}'", path);
+            spdlog::debug("expected particles count (galaxy-specified): {}", expected_count);
+
             FILE* f = fopen(path.c_str(), "r");
             if (!f) return (std::size_t)0; // File missing is acceptable (e.g. DM component missing)
 
@@ -200,14 +208,18 @@ namespace khrr_particles {
             int header_count = 0;
             real header_time = 0.0;
             if (fscanf(f, "%d %lf", &header_count, &header_time) != 2) {
-                std::cerr << "[Warning] Failed to read header from " << path << "\n";
+                spdlog::error("Failed to read header");
                 fclose(f);
                 return (std::size_t)0;
             }
+            spdlog::debug("header particles count: {}", header_count);
 
             if (static_cast<std::size_t>(header_count) != expected_count) {
-                std::cerr << "[Warning] " << path << " header says " << header_count
-                        << " particles, but expected " << expected_count << ".\n";
+                spdlog::error(
+                    "Warning: header says {} particles, but expected {}",
+                    header_count,
+                    expected_count
+                );
             }
 
             real x, y, z, vx, vy, vz;
@@ -234,16 +246,19 @@ namespace khrr_particles {
             fclose(f);
 
             if (read_count != expected_count) {
-                std::cerr << "[Warning] " << path << " has " << read_count
-                          << " lines, expected " << expected_count << ".\n";
+                spdlog::error(
+                    "Warning: file has {} lines, expected {}",
+                    read_count,
+                    expected_count
+                );
             }
             return read_count;
         };
 
         std::size_t total_stars = 0;
         // 1. Read all Stars
-        for (int i = 0; i < sim_params.M_glx; ++i) {
-            const auto& g = sim_params.galaxies[i];
+        for (int i = 0; i < galaxies_params.M_glx; ++i) {
+            const auto& g = galaxies_params.galaxies[i];
             // Filename format start_S%d.txt. Using galaxy index (usually 1-based in filenames)
             // We check if k_glx is usable (if != 0 or similar) or fallback to i+1.
             // Given struct has k_glx, I'll assume it holds the intended ID.
@@ -251,15 +266,18 @@ namespace khrr_particles {
             total_stars += read_text_file(fname, g.N_s);
         }
         result.n_stars = total_stars;
+        spdlog::info("n stars: {}", result.n_stars);
 
         std::size_t total_dm = 0;
         // 2. Read all DM
-        for (int i = 0; i < sim_params.M_glx; ++i) {
-            const auto& g = sim_params.galaxies[i];
+        for (int i = 0; i < galaxies_params.M_glx; ++i) {
+            const auto& g = galaxies_params.galaxies[i];
             std::string fname = fmt::format("start_DM{}.txt", g.k_glx);
             total_dm += read_text_file(fname, g.N_dm);
         }
         result.n_dm = total_dm;
+        spdlog::info("n dark matter: {}", result.n_dm);
+        spdlog::info("n total: {}", result.n_stars + result.n_dm);
 
         return result;
     }

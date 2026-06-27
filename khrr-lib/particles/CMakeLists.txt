@@ -6,15 +6,16 @@ add_library(khrr_particles STATIC
 )
 target_include_directories(khrr_particles
     PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 target_link_libraries(khrr_particles
     PUBLIC
-    khrr_galaxy_params
-    khrr_common
+        khrr_galaxy_params
+        khrr_common
     PRIVATE
-    fmt::fmt
+        spdlog::spdlog
+        fmt::fmt
 )
 set_target_properties(khrr_particles PROPERTIES
     CXX_STANDARD 17
@@ -26,9 +27,9 @@ add_executable(test_particles
 )
 target_link_libraries(test_particles
     PUBLIC
-    fmt::fmt
-    khrr_particles
-    Catch2::Catch2WithMain
+        fmt::fmt
+        khrr_particles
+        Catch2::Catch2WithMain
 )
 
 # Тестовая программа, которая читает файл и выводит информацию о нём
@@ -37,6 +38,6 @@ add_executable(sample_particles
 )
 target_link_libraries(sample_particles
     PUBLIC
-    fmt::fmt
-    khrr_particles
+        fmt::fmt
+        khrr_particles
 )

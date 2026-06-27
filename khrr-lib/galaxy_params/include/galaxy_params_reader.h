@@ -13,9 +13,9 @@ namespace khrr_galaxy_params {
  * Uses `range-v3` lazy views for batch validation of numerical fields.
  *
  * @param filepath Path to the INI file.
- * @return SimulationParams Populated and validated structure.
+ * @return GalaxiesParams Populated and validated structure.
  * @throws std::runtime_error If file is missing, malformed, or violates physical constraints.
  */
-SimulationParams read_galaxy_params(const std::string& filepath);
+GalaxiesParams read_galaxy_params(const std::string& filepath);
 
 } // namespace khrr_galaxy_params

@@ -25,9 +25,9 @@ struct GalaxyParams {
 };
 
 /**
- * @brief Root container for simulation input parameters.
+ * @brief Root container for galaxies input parameters.
  */
-struct SimulationParams {
+struct GalaxiesParams {
     int M_glx; ///< Total number of galaxies
     std::vector<GalaxyParams> galaxies;
 };

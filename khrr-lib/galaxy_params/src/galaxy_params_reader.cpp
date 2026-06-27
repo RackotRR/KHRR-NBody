@@ -15,7 +15,7 @@
 namespace khrr_galaxy_params {
 using khrr_parser::parse_tuple_values;
 
-SimulationParams read_galaxy_params(const std::string& filepath) {
+GalaxiesParams read_galaxy_params(const std::string& filepath) {
     spdlog::info("load galaxy params");
     std::vector<std::string> lines = khrr_parser::read_file(filepath);
 
@@ -23,7 +23,7 @@ SimulationParams read_galaxy_params(const std::string& filepath) {
     auto [M_glx] = parse_tuple_values<int>(lines[0]);
     if (M_glx <= 0) throw std::runtime_error("M_glx must be strictly positive.");
 
-    SimulationParams params{M_glx};
+    GalaxiesParams params{M_glx};
     params.galaxies.reserve(M_glx);
 
     constexpr std::size_t LINES_PER_GALAXY = 7;
