@@ -18,9 +18,13 @@ target_include_directories(khrr_nbody
 target_link_libraries(khrr_nbody
     PUBLIC
         khrr_common
+        khrr_particles
     PRIVATE
         CUDA::cudart
+        spdlog::spdlog
 )
+
+target_compile_definitions(khrr_nbody PRIVATE FMT_UNICODE=0)
 
 set_target_properties(khrr_nbody PROPERTIES
     CUDA_SEPARABLE_COMPILATION  ON

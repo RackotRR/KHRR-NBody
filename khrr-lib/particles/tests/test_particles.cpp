@@ -36,15 +36,41 @@ TEST_CASE("Binary save and load - normal", "[binary]") {
     std::vector<khrr_common::real3> dm_pos = {{6,7,8}};
     std::vector<khrr_common::real3> dm_vel = {{6.6,7.7,8.8}};
 
+    khrr_galaxy_params::GalaxiesParams galaxies_params;
+    galaxies_params.M_glx = 1;
+    auto& galaxy = galaxies_params.galaxies.emplace_back();
+    galaxy.N_s = 2;
+    galaxy.N_dm = 1;
+    galaxy.eps_s = 0.1;
+    galaxy.eps_dm = 0.2;
+    galaxy.Mass_s = 1.;
+    galaxy.Mass_dm = 4.;
+
+    khrr_particles::ParticleData particles_data;
+    particles_data.positions = std::vector<khrr_common::real3>{
+        // stars
+        {0,1,2}, {3,4,5},
+        // dm
+        {6,7,8}
+    };
+    particles_data.velocities = std::vector<khrr_common::real3>{
+        // stars
+        {0.1,1.1,2.1}, {3.1,4.1,5.1},
+        // dm
+        {6.6,7.7,8.8}
+    };
+
     // Save
-    REQUIRE_NOTHROW(khrr_particles::save_binary(dir, 10, 123.45, s_pos, s_vel, dm_pos, dm_vel));
+    REQUIRE_NOTHROW(
+        khrr_particles::save_binary(dir, 10, 123.45, particles_data, galaxies_params)
+    );
 
     // Verify files exist
     REQUIRE(fs::exists(dir + "/S_   10.bin"));
     REQUIRE(fs::exists(dir + "/DM_   10.bin"));
 
     // Load with expected counts matching file
-    auto data = khrr_particles::load_binary(dir, 10, 2, 1);
+    auto data = khrr_particles::load_binary(dir, 10, galaxies_params);
 
     CHECK(data.n_stars == 2);
     CHECK(data.n_dm == 1);
@@ -72,14 +98,25 @@ TEST_CASE("Binary load - header mismatch and missing file", "[binary]") {
     std::vector<khrr_common::real3> s_pos = {{10,20,30}};
     std::vector<khrr_common::real3> s_vel = {{0.1,0.2,0.3}};
 
+    khrr_galaxy_params::GalaxiesParams galaxies_params;
+    auto& galaxy = galaxies_params.galaxies.emplace_back();
+    galaxy.N_s = 1;
+
+    khrr_particles::ParticleData particles_data;
+    particles_data.positions = { { 10., 20., 30. } };
+    particles_data.velocities = { { 0.1, 0.2, 0.3 } };
+
     // Save 1 Star
-    REQUIRE_NOTHROW(khrr_particles::save_binary(dir, 5, 0.0, s_pos, s_vel, {}, {}));
+    REQUIRE_NOTHROW(
+        khrr_particles::save_binary(dir, 5, 0.0, particles_data, galaxies_params)
+    );
 
     // Remove DM file if it exists (save_binary with empty might not create it, but good to check)
     if (fs::exists(dir + "/DM_    5.bin")) fs::remove(dir + "/DM_    5.bin");
 
     // Load with expected 2 Stars (header says 1). Should warn and load min(1,2)=1.
-    auto data = khrr_particles::load_binary(dir, 5, 2, 0);
+    galaxy.N_s = 2;
+    auto data = khrr_particles::load_binary(dir, 5, galaxies_params);
 
     CHECK(data.n_stars == 1);
     CHECK(data.n_dm == 0);

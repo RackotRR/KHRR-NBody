@@ -4,6 +4,7 @@ project(khrr_galaxy_params LANGUAGES CXX)
 # Основная библиотека
 add_library(khrr_galaxy_params STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/galaxy_params_reader.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/galaxy_params.cpp
 )
 target_include_directories(khrr_galaxy_params
     PUBLIC

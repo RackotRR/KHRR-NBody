@@ -5,25 +5,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <galaxy_params.h>
-#include <khrr_types.h>
+#include <particle_data.h>
 
 namespace khrr_particles {
-
-using khrr_common::real;
-using khrr_common::real3;
-
-/**
- * @brief Container holding particle positions, velocities, and component counts.
- * Data is stored in a Structure of Arrays-like manner via separate vectors.
- */
-struct ParticleData {
-    std::vector<real3> positions;
-    std::vector<real3> velocities;
-    std::vector<real> masses;
-    std::vector<real> eps2; // softening
-    std::size_t n_stars = 0;
-    std::size_t n_dm   = 0;
-};
 
 /**
  * @brief Saves particle snapshot to binary format.
@@ -42,10 +26,8 @@ void save_binary(
     const std::string& directory,
     int step,
     real time,
-    const std::vector<real3>& star_pos,
-    const std::vector<real3>& star_vel,
-    const std::vector<real3>& dm_pos,
-    const std::vector<real3>& dm_vel
+    const ParticleData& particles,
+    const khrr_galaxy_params::GalaxiesParams& galaxies_params
 );
 
 /**
@@ -53,17 +35,15 @@ void save_binary(
  * @details Reads S_%5d.bin and DM_%5d.bin. Validates header count against expected values.
  * If mismatch, warns and reads min(expected, header, available).
  *
- * @param directory      Directory containing the files.
- * @param step           Time step identifier.
- * @param expected_stars Expected number of star particles.
- * @param expected_dm    Expected number of DM particles.
- * @return               Loaded ParticleData.
+ * @param directory       Directory containing the files.
+ * @param step            Time step identifier.
+ * @param galaxies_params Galaxies parameters defining expected counts.
+ * @return                Loaded ParticleData.
  */
 ParticleData load_binary(
     const std::string& directory,
     int step,
-    std::size_t expected_stars,
-    std::size_t expected_dm
+    const khrr_galaxy_params::GalaxiesParams& galaxies_params
 );
 
 /**

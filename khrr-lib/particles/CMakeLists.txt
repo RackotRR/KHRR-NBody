@@ -16,6 +16,7 @@ target_link_libraries(khrr_particles
     PRIVATE
         spdlog::spdlog
         fmt::fmt
+        range-v3::range-v3
 )
 set_target_properties(khrr_particles PROPERTIES
     CXX_STANDARD 17

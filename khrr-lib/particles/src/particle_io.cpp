@@ -8,11 +8,20 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <range/v3/all.hpp>
 
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
 
 namespace khrr_particles {
+
+    using khrr_galaxy_params::GalaxiesParams;
+    using khrr_galaxy_params::GalaxyParams;
+    using khrr_galaxy_params::count_dm;
+    using khrr_galaxy_params::count_stars;
+
+    constexpr const char* STAR_PREFIX = "S";
+    constexpr const char* DM_PREFIX = "DM";
 
     // Helper for binary I/O
     static void read_binary_component(
@@ -26,6 +35,7 @@ namespace khrr_particles {
     )
     {
         std::string path = fmt::format("{}/{}_{:5d}.bin", directory, component_prefix, step);
+        spdlog::info("Read binary component from {}", path);
 
         FILE* f = fopen(path.c_str(), "rb");
         if (!f) {
@@ -36,11 +46,10 @@ namespace khrr_particles {
         // Read header: [int count][real time]
         int header_count_int = 0;
         real time = 0.0;
-        size_t read_h1 = fread(&header_count_int, sizeof(int), 1, f);
-        size_t read_h2 = fread(&time, sizeof(real), 1, f);
-
-        if (read_h1 != 1 || read_h2 != 1) {
-            std::cerr << "[Warning] Failed to read header from " << path << "\n";
+        if (fread(&header_count_int, sizeof(int),  1, f) != 1 ||
+            fread(&time,             sizeof(real), 1, f) != 1
+        ) {
+            spdlog::error("Failed to read header from {}", path);
             fclose(f);
             out_read_count = 0;
             return;
@@ -49,8 +58,12 @@ namespace khrr_particles {
         std::size_t header_count = static_cast<std::size_t>(header_count_int);
 
         if (header_count != expected_count) {
-            std::cerr << "[Warning] " << path << " header says " << header_count
-                      << " particles, but expected " << expected_count << ".\n";
+            spdlog::error(
+                "{} header says {} particles, but expected {}",
+                path,
+                header_count,
+                expected_count
+            );
         }
 
         // Limit is min(expected, header_available)
@@ -59,7 +72,7 @@ namespace khrr_particles {
 
         // Buffer for reading chunks (6 doubles per particle)
         // 48 bytes per particle. 100k particles = ~4.8MB buffer.
-        const std::size_t CHUNK_PARTICLES = 100000;
+        const std::size_t CHUNK_PARTICLES = 100'000;
         std::vector<real> buffer(CHUNK_PARTICLES * 6);
 
         std::size_t total_read = 0;
@@ -70,31 +83,32 @@ namespace khrr_particles {
         while (total_read < limit) {
             std::size_t to_read_now = std::min(CHUNK_PARTICLES, limit - total_read);
             std::size_t items_to_read = to_read_now * 6;
-
             std::size_t items_read = fread(buffer.data(), sizeof(real), items_to_read, f);
-
             if (items_read == 0) break; // EOF or error
 
             std::size_t particles_in_chunk = items_read / 6;
-
             for (std::size_t i = 0; i < particles_in_chunk; ++i) {
                 std::size_t idx = i * 6;
                 // X Y Z VX VY VZ
-                out_pos.push_back({buffer[idx], buffer[idx+1], buffer[idx+2]});
-                out_vel.push_back({buffer[idx+3], buffer[idx+4], buffer[idx+5]});
+                out_pos.push_back({buffer[idx],     buffer[idx + 1], buffer[idx + 2]});
+                out_vel.push_back({buffer[idx + 3], buffer[idx + 4], buffer[idx + 5]});
             }
             total_read += particles_in_chunk;
 
             // If we read incomplete particle set (not multiple of 6), stop.
             if (items_read % 6 != 0) {
-                 std::cerr << "[Warning] Corrupt/Short binary data in " << path << "\n";
-                 break;
+                spdlog::error("Corrupt/Short binary data in {}", path);
+                break;
             }
         }
 
         if (total_read != limit && header_count > 0) {
-             std::cerr << "[Warning] Could only read " << total_read << " particles from "
-                       << path << " (expected " << limit << " based on header/limit).\n";
+            spdlog::error(
+                "Could only read {} particles from {} (expected {} based on header/limit)",
+                total_read,
+                path,
+                limit
+            );
         }
 
         fclose(f);
@@ -105,17 +119,14 @@ namespace khrr_particles {
         const std::string& directory,
         int step,
         real time,
-        const std::vector<real3>& star_pos,
-        const std::vector<real3>& star_vel,
-        const std::vector<real3>& dm_pos,
-        const std::vector<real3>& dm_vel
+        const ParticleData& particles,
+        const GalaxiesParams& galaxies_params
     )
     {
-        if (star_pos.size() != star_vel.size()) {
-            throw std::invalid_argument("Star position and velocity size mismatch");
-        }
-        if (dm_pos.size() != dm_vel.size()) {
-            throw std::invalid_argument("DM position and velocity size mismatch");
+        spdlog::info("Save binary");
+
+        if (false == particles.is_valid()) {
+            throw std::invalid_argument("Invalid particles passed");
         }
 
         // Create directory if needed
@@ -123,54 +134,133 @@ namespace khrr_particles {
 
         auto write_component = [&](
             const std::string& prefix,
-            const std::vector<real3>& pos,
-            const std::vector<real3>& vel
+            auto&& pos,
+            auto&& vel
         ) {
+            spdlog::info("Write component {}", prefix);
+
             std::string filepath = fmt::format("{}/{}_{:5d}.bin", directory, prefix, step);
             FILE* f = fopen(filepath.c_str(), "wb");
-            if (!f) throw std::runtime_error("Cannot open " + filepath);
+            if (!f) {
+                throw std::runtime_error("Cannot open " + filepath);
+            }
 
             int n = static_cast<int>(pos.size());
-            if (fwrite(&n, sizeof(int), 1, f) != 1 || fwrite(&time, sizeof(real), 1, f) != 1) {
+            if (fwrite(&n,    sizeof(int),  1, f) != 1 ||
+                fwrite(&time, sizeof(real), 1, f) != 1
+            ) {
                 fclose(f);
                 throw std::runtime_error("Failed to write header for " + filepath);
             }
 
             // Write [x y z vx vy vz] blocks
-            for (std::size_t i = 0; i < pos.size(); ++i) {
-                fwrite(&pos[i].x, sizeof(real), 1, f);
-                fwrite(&pos[i].y, sizeof(real), 1, f);
-                fwrite(&pos[i].z, sizeof(real), 1, f);
-                fwrite(&vel[i].x, sizeof(real), 1, f);
-                fwrite(&vel[i].y, sizeof(real), 1, f);
-                fwrite(&vel[i].z, sizeof(real), 1, f);
+            for (auto&& [p, v] : ranges::views::zip(pos, vel)) {
+                fwrite(&p.x, sizeof(real), 1, f);
+                fwrite(&p.y, sizeof(real), 1, f);
+                fwrite(&p.z, sizeof(real), 1, f);
+                fwrite(&v.x, sizeof(real), 1, f);
+                fwrite(&v.y, sizeof(real), 1, f);
+                fwrite(&v.z, sizeof(real), 1, f);
             }
             fclose(f);
         };
 
-        write_component("S", star_pos, star_vel);
-        write_component("DM", dm_pos, dm_vel);
+        size_t N_s = count_stars(galaxies_params);
+        size_t N_dm = count_dm(galaxies_params);
+        size_t N = N_s + N_dm;
+        write_component(
+            STAR_PREFIX,
+            particles.positions
+                | ranges::views::slice(0ull, N_s),
+            particles.velocities
+                | ranges::views::slice(0ull, N_s)
+        );
+        write_component(
+            "DM",
+            particles.positions
+                | ranges::views::slice(N_s, N),
+            particles.velocities
+                | ranges::views::slice(N_s, N)
+        );
     }
 
     ParticleData load_binary(
         const std::string& directory,
         int step,
-        std::size_t expected_stars,
-        std::size_t expected_dm
+        const GalaxiesParams& galaxies_params
     )
     {
         ParticleData result;
+
+        size_t expected_stars = count_stars(galaxies_params);
+        size_t expected_dm = count_dm(galaxies_params);
+        size_t expected_all = expected_stars + expected_dm;
+
         // Reserve to prevent fragmentation if expected is accurate
-        result.positions.reserve(expected_stars + expected_dm);
-        result.velocities.reserve(expected_stars + expected_dm);
+        result.positions.reserve(expected_all);
+        result.velocities.reserve(expected_all);
 
         // Stars first
-        read_binary_component(directory, step, "S", expected_stars,
-                              result.positions, result.velocities, result.n_stars);
+        read_binary_component(
+            directory,
+            step,
+            "S",
+            expected_stars,
+            result.positions,
+            result.velocities,
+            result.n_stars
+        );
 
         // DM next
-        read_binary_component(directory, step, "DM", expected_dm,
-                              result.positions, result.velocities, result.n_dm);
+        read_binary_component(
+            directory,
+            step,
+            "DM",
+            expected_dm,
+            result.positions,
+            result.velocities,
+            result.n_dm
+        );
+
+        // fill in mass and eps
+
+        result.masses.reserve(expected_all);
+        result.eps2.reserve(expected_all);
+
+        auto append_component_with_mass_eps = [&galaxies_params, &result](
+            auto get_N,
+            auto get_mass,
+            auto get_eps
+        )
+        {
+            for (const auto& galaxy : galaxies_params.galaxies) {
+                size_t n = std::invoke(get_N, std::cref(galaxy));
+                double mass = std::invoke(get_mass, std::cref(galaxy));
+                double eps = std::invoke(get_eps, std::cref(galaxy));
+
+                ranges::fill_n(
+                    ranges::back_inserter(result.masses),
+                    n,
+                    mass
+                );
+                ranges::fill_n(
+                    ranges::back_inserter(result.eps2),
+                    n,
+                    eps * eps
+                );
+            }
+        };
+
+        append_component_with_mass_eps(
+            &GalaxyParams::N_s,
+            &GalaxyParams::Mass_s,
+            &GalaxyParams::eps_s
+        );
+        append_component_with_mass_eps(
+            &GalaxyParams::N_dm,
+            &GalaxyParams::Mass_dm,
+            &GalaxyParams::eps_dm
+        );
 
         return result;
     }
@@ -195,6 +285,8 @@ namespace khrr_particles {
 
         auto read_text_file = [&](
             const std::string& filename,
+            double eps2,
+            double mass,
             std::size_t expected_count
         ) {
             std::string path = fmt::format("{}/{}", directory, filename);
@@ -243,6 +335,17 @@ namespace khrr_particles {
             result.positions.insert(result.positions.end(), temp_pos.begin(), temp_pos.end());
             result.velocities.insert(result.velocities.end(), temp_vel.begin(), temp_vel.end());
 
+            std::fill_n(
+                std::back_inserter(result.masses),
+                read_count,
+                mass
+            );
+            std::fill_n(
+                std::back_inserter(result.eps2),
+                read_count,
+                eps2
+            );
+
             fclose(f);
 
             if (read_count != expected_count) {
@@ -263,7 +366,12 @@ namespace khrr_particles {
             // We check if k_glx is usable (if != 0 or similar) or fallback to i+1.
             // Given struct has k_glx, I'll assume it holds the intended ID.
             std::string fname = fmt::format("start_S{}.txt", g.k_glx);
-            total_stars += read_text_file(fname, g.N_s);
+            total_stars += read_text_file(
+                fname,
+                g.Mass_s,
+                g.eps_s * g.eps_s,
+                g.N_s
+            );
         }
         result.n_stars = total_stars;
         spdlog::info("n stars: {}", result.n_stars);
@@ -273,7 +381,12 @@ namespace khrr_particles {
         for (int i = 0; i < galaxies_params.M_glx; ++i) {
             const auto& g = galaxies_params.galaxies[i];
             std::string fname = fmt::format("start_DM{}.txt", g.k_glx);
-            total_dm += read_text_file(fname, g.N_dm);
+            total_dm += read_text_file(
+                fname,
+                g.Mass_dm,
+                g.eps_dm * g.eps_dm,
+                g.N_dm
+            );
         }
         result.n_dm = total_dm;
         spdlog::info("n dark matter: {}", result.n_dm);

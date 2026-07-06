@@ -55,8 +55,7 @@ auto read_particles_bin(const khrr_galaxy_params::GalaxiesParams& galaxies_param
     auto particles_data = khrr_particles::load_binary(
         fs::current_path().string(),
         10,
-        1000,
-        1000
+        galaxies_params
     );
 
     std::cout << "star particles loaded: " << particles_data.n_stars << std::endl;

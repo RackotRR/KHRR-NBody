@@ -9,7 +9,7 @@
 
 using khrr_common::real3;
 
-static khrr_nbody::NBodyParticles
+static khrr_nbody::ParticleData
 make_particles(
     int         N,
     double      mass     = 1.0,
@@ -17,7 +17,7 @@ make_particles(
     real3       pos0     = {0,0,0},
     real3       vel0     = {0,0,0})
 {
-    khrr_nbody::NBodyParticles p;
+    khrr_nbody::ParticleData p;
     p.n_stars = static_cast<std::size_t>(N);
     p.n_dm    = 0;
     for (int i = 0; i < N; ++i) {
@@ -51,8 +51,22 @@ int main(void) {
         );
 
         khrr_nbody::NBodyContext ctx;
-        ctx.upload(make_particles(4));
-        ctx.integrate(0.01, 5, 20);
+        ctx.upload(particles);
+
+        std::size_t n_steps = std::max<std::size_t>(
+            1ull,
+            sim_params.dt_save / grav_params.dtgrav
+        );
+        std::size_t n_steps_total = std::max<std::size_t>(
+            1ull,
+            sim_params.tmax / grav_params.dtgrav
+        );
+
+        ctx.integrate(
+            grav_params.dtgrav,
+            n_steps,
+            n_steps_total
+        );
 
         auto ti = ctx.timing();
         spdlog::info("steps done: {}", ti.steps_done);

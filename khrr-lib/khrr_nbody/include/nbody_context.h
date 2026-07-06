@@ -6,36 +6,13 @@
 #include <stdexcept>
 
 #include <khrr_types.h>
+#include <particle_data.h>
 
 namespace khrr_nbody {
 
 using khrr_common::real;
 using khrr_common::real3;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Host-side particle container
-// Layout mirrors khrr_particles::ParticleData for easy conversion (see nbody_compat.h).
-// ─────────────────────────────────────────────────────────────────────────────
-struct NBodyParticles {
-    std::vector<real3> positions;   ///< [N] world-space positions
-    std::vector<real3> velocities;  ///< [N] velocities
-    std::vector<real>  masses;      ///< [N] masses (must be >= 0)
-    std::vector<real>  eps2;        ///< [N] per-particle softening² (>= 0)
-    std::size_t          n_stars = 0;
-    std::size_t          n_dm    = 0;
-
-    std::size_t size() const noexcept { return positions.size(); }
-
-    /// True if every sub-array has the same length and n_stars+n_dm == N.
-    bool is_valid() const noexcept {
-        const std::size_t n = positions.size();
-        return !positions.empty()          &&
-               velocities.size() == n      &&
-               masses.size()     == n      &&
-               eps2.size()       == n      &&
-               (n_stars + n_dm)  == n;
-    }
-};
+using khrr_particles::ParticleData;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Timing information produced by integrate()
@@ -73,11 +50,11 @@ public:
     /// Upload particles to GPU and reset simulation time to 0.
     /// Computes initial accelerations immediately.
     /// @throws std::invalid_argument  particles.is_valid() == false OR empty.
-    void upload(const NBodyParticles& particles);
+    void upload(const ParticleData& particles);
 
     /// Download current particle state from GPU to host.
     /// @throws std::logic_error  if upload() was never called.
-    NBodyParticles download() const;
+    ParticleData download() const;
 
     // ── Integration ──────────────────────────────────────────────────────────
 

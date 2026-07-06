@@ -32,4 +32,7 @@ struct GalaxiesParams {
     std::vector<GalaxyParams> galaxies;
 };
 
+size_t count_stars(const GalaxiesParams& galaxies_params);
+size_t count_dm(const GalaxiesParams& galaxies_params);
+
 } // namespace khrr_galaxy_params

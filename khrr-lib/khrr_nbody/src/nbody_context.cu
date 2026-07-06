@@ -10,6 +10,8 @@
 #include <cstdio>
 #include <stdexcept>
 
+#include <spdlog/spdlog.h>
+
 // Helper: throw on CUDA error
 #define CUDA_CHECK(expr)                                                       \
     do {                                                                        \
@@ -126,8 +128,8 @@ NBodyContext::NBodyContext(real G)
 NBodyContext::~NBodyContext() = default;
 
 // ── upload ────────────────────────────────────────────────────────────────────
-void NBodyContext::upload(const NBodyParticles& p)
-{
+void NBodyContext::upload(const ParticleData& p) {
+    spdlog::info("upload particles");
     if (p.size() == 0)
         throw std::invalid_argument(
             "NBodyContext::upload: particle set is empty");
@@ -149,6 +151,8 @@ void NBodyContext::upload(const NBodyParticles& p)
     thrust::copy(p.masses.begin(),     p.masses.end(),     impl_->d_mass.begin());
     thrust::copy(p.eps2.begin(),       p.eps2.end(),       impl_->d_eps2.begin());
 
+    spdlog::info("arrays copied");
+
     // Seed a_0 so the first kick has valid accelerations.
     impl_->eval_accel();
 
@@ -156,13 +160,13 @@ void NBodyContext::upload(const NBodyParticles& p)
 }
 
 // ── download ──────────────────────────────────────────────────────────────────
-NBodyParticles NBodyContext::download() const
+ParticleData NBodyContext::download() const
 {
     if (!impl_->ready)
         throw std::logic_error(
             "NBodyContext::download: no particles loaded; call upload() first");
 
-    NBodyParticles out;
+    ParticleData out;
     std::size_t N = impl_->n_total;
     out.positions.resize(N);
     out.velocities.resize(N);

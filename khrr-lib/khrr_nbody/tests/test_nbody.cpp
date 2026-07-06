@@ -17,14 +17,14 @@ using Catch::Matchers::WithinAbs;
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-static NBodyParticles make_particles(
+static ParticleData make_particles(
     int         N,
     double      mass     = 1.0,
     double      eps2_val = 0.01,
     real3       pos0     = {0,0,0},
     real3       vel0     = {0,0,0})
 {
-    NBodyParticles p;
+    ParticleData p;
     p.n_stars = static_cast<std::size_t>(N);
     p.n_dm    = 0;
     for (int i = 0; i < N; ++i) {
@@ -37,12 +37,12 @@ static NBodyParticles make_particles(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Section 1: NBodyParticles validation
+// Section 1: ParticleData validation
 // ─────────────────────────────────────────────────────────────────────────────
-TEST_CASE("NBodyParticles::is_valid rejects inconsistent data", "[particles]")
+TEST_CASE("ParticleData::is_valid rejects inconsistent data", "[particles]")
 {
     SECTION("empty → invalid") {
-        NBodyParticles p;
+        ParticleData p;
         CHECK_FALSE(p.is_valid());
     }
 
@@ -84,7 +84,7 @@ TEST_CASE("NBodyContext::upload throws on bad input", "[upload]")
     NBodyContext ctx;
 
     SECTION("empty particle set") {
-        NBodyParticles empty;
+        ParticleData empty;
         empty.n_stars = 0; empty.n_dm = 0;
         CHECK_THROWS_AS(ctx.upload(empty), std::invalid_argument);
     }
@@ -180,7 +180,7 @@ TEST_CASE("upload then immediate download preserves positions and velocities", "
 // ─────────────────────────────────────────────────────────────────────────────
 TEST_CASE("Single particle drifts with constant velocity (no force)", "[physics]")
 {
-    NBodyParticles p;
+    ParticleData p;
     p.n_stars = 1; p.n_dm = 0;
     p.positions .push_back({0.0, 0.0, 0.0});
     p.velocities.push_back({1.0, 0.0, 0.0}); // vx = 1
@@ -211,7 +211,7 @@ TEST_CASE("Single particle drifts with constant velocity (no force)", "[physics]
 // ─────────────────────────────────────────────────────────────────────────────
 TEST_CASE("Two-body system conserves total linear momentum", "[physics]")
 {
-    NBodyParticles p;
+    ParticleData p;
     p.n_stars = 2; p.n_dm = 0;
     // Place on x-axis, same mass, symmetric velocities
     p.positions .push_back({-1.0, 0.0, 0.0});
