@@ -59,14 +59,14 @@ __device__ real3 dev_fex(real4 p, real t){
 		rrcore = rr / dd.a;
 		rrbcore1 = rr / dd.b;
 		root1 = sqrt(1.0 + rrbcore1*rrbcore1);
-	
+
 		//--Halo--
 		if (rr<dd.Rh2) forcehalo = -dd.con *(rrcore - atan(rrcore)) / rr3;
 		else  forcehalo = -dd.Mh_inf / rr3;
 		//--Bulge--
 		if (rr<dd.Rb) forceblg1 = -dd.const1*(dd.b*log(rrbcore1 + root1) - rr / root1) / rr3;
 		else  forceblg1 = -dd.Mb / rr3;
-	
+
 		forcesph = forceblg1 + forcehalo;
 		f.x = forcesph * p.x;
 		f.y = forcesph * p.y;
@@ -118,7 +118,7 @@ __global__ void ACCEL(real3 *ACC, real4 *Pos_i, real4 *Pos_j, real2 *Mhp_j, real
 		}
 		__syncthreads();
 	}
-	ACC[ii] = make_real3(ACC[ii].x + f.x, ACC[ii].y + f.y, ACC[ii].z + f.z); 
+	ACC[ii] = make_real3(ACC[ii].x + f.x, ACC[ii].y + f.y, ACC[ii].z + f.z);
 	//ACC[ii] = f;
 }
 
@@ -174,7 +174,7 @@ __global__ void kernelNbody_integTime(real3 *ACC, real4 *Pos_t, real4 *Vel_t, re
 		Pos_t[i].z = r.z + 0.5*dt*(v.z + vt.z);
 		Pos_t[i].x = r.x + 0.5*dt*(v.x + vt.x);
 		Pos_t[i].y = r.y + 0.5*dt*(v.y + vt.y);
-		
+
 		Vel_t[i] = vt;
 	} else{
 		//------corrector---------------------- q_t = q(t), q = q(t+dt) - predictor, dt = dt
@@ -184,7 +184,7 @@ __global__ void kernelNbody_integTime(real3 *ACC, real4 *Pos_t, real4 *Vel_t, re
 		vtt.z = 0.5*(vt.z + v.z + dt*f.z);
 		vtt.x = 0.5*(vt.x + v.x + dt*f.x);
 		vtt.y = 0.5*(vt.y + v.y + dt*f.y);
-		
+
 		Pos_t[i] = r;
 		Vel_t[i] = vtt;
 		ACC0[i] = ACC[i];
@@ -231,7 +231,7 @@ __host__ void  result(real4 *pos, real4 *vel, real2 *mass, int it, real t, real 
   		}
   	fclose(outf);
 	}
-  L.x = 0.0; L.y = 0.0; L.z = 0.0; 
+  L.x = 0.0; L.y = 0.0; L.z = 0.0;
   Ek = 0.0; Ep = 0.0;
 	for (i = 0; i < NN; i++)
 	{
@@ -244,8 +244,8 @@ __host__ void  result(real4 *pos, real4 *vel, real2 *mass, int it, real t, real 
 		L.x += (vz*y - vy*z)*mass[i].x;
 		L.y += (vx*z - vz*x)*mass[i].x;
     L.z += (vy*x - vx*y)*mass[i].x;
-    Imp.x += mass[i].x*vx; 
-    Imp.y += mass[i].x*vy; 
+    Imp.x += mass[i].x*vx;
+    Imp.y += mass[i].x*vy;
     Imp.z += mass[i].x*vz;
     Ek += mass[i].x*(vx*vx+vy*vy+vz*vz);
     Ep += mass[i].x*PSI[i];
@@ -292,10 +292,10 @@ __host__ void  result(real4 *pos, real4 *vel, real2 *mass, int it, real t, real 
 	outf = (it==0) ? fopen("Imp(t).dat", "w") : fopen("Imp(t).dat", "a");
   real Impls = sqrt(Imp.x*Imp.x+Imp.y*Imp.y+Imp.z*Imp.z);
   real Impls0 = sqrt(Imp0.x*Imp0.x+Imp0.y*Imp0.y+Imp0.z*Imp0.z);
-	fprintf(outf, "%d %f %1.15f %g %g %g\n", it_all, t, Impls, Impls-Impls0, Impls/Impls0-1.0, fabs(Impls/Impls0-1.0));
+	fprintf(outf, "%d %f %1.15f %g %g %g %g\n", it_all, t, Impls, Impls-Impls0, Impls/Impls0-1.0, fabs(Impls/Impls0-1.0), fabs(Impls-Impls0));
 	fclose(outf);
   outf = (it==0) ? fopen("E(t).dat", "w") : fopen("E(t).dat", "a");
-	fprintf(outf, "%d %f %1.15f %g %g %g %g\n", it_all, t, E, E/E0-1.0, fabs(E/E0-1.0), 0.5*Ek, 0.5*Ep);
+	fprintf(outf, "%d %f %1.15f %g %g %g %g %g\n", it_all, t, E, E/E0-1.0, fabs(E/E0-1.0), 0.5*Ek, 0.5*Ep, fabs(2.0*Ek+Ep));
 	fclose(outf);
 }
 
@@ -345,8 +345,8 @@ int main(int argc, char * argv[])
 				printf("can_access_peer=%d, %d, %d\n", can_access_peer, deviceId[i], deviceId[j]);
 				if (can_access_peer == 0) {
 					printf("ERROR! -- can_access_peer = 0 for deviceId = %d  and  deviceId = %d\n", deviceId[i], deviceId[j]);
-					printf("Press any key + Enter\n"); 
-					scanf("%d", &itmp); 
+					printf("Press any key + Enter\n");
+					scanf("%d", &itmp);
 					exit(0);
 				}
 			}
@@ -415,7 +415,7 @@ int main(int argc, char * argv[])
 	printf("%f\n", dtsave);
 
 	printf("Ns / BLOCK_SIZE_b = %d\n", Ns / BLOCK_SIZE);
-	printf("Ndm / BLOCK_SIZE_b = %d\n", Ns / BLOCK_SIZE);
+	printf("Ndm / BLOCK_SIZE_b = %d\n", Ndm / BLOCK_SIZE);
 	printf("NN / BLOCK_SIZE_b = %d\n", NN / BLOCK_SIZE);
 
 	outf = fopen("__gr_par.ini", "r");
@@ -476,7 +476,7 @@ int main(int argc, char * argv[])
 		mass_host[i].x = 0.0; mass_host[i].y = 0.0; PSI_host[i] = 0.0;
 	}
 
-	d.Ns = Ns; d.NN = NN; 
+	d.Ns = Ns; d.NN = NN;
 	d.Mh = Mh; d.Mh_inf = Mh_inf; d.a = a; d.Rh = Rh; d.Mb = Mb; d.b = b; d.Rb = Rb; d.Rh2 = Rh2; d.con = con;	d.const1 = const1;
 	d.c_psi_h = c_psi_h; d.c_psi_b = c_psi_b; d.eps2 = eps2;
 
@@ -492,7 +492,7 @@ int main(int argc, char * argv[])
       	fread(&Ns, sizeof(int), 1, outf);
 				fread(&t, sizeof(double), 1, outf);
 				n0=0;
-				for(k=0; k<M_glx; k++){						
+				for(k=0; k<M_glx; k++){
         	for (i = n0; i < n0+N_s[k]; i++) {
 						fread(&pos_host[i].x, sizeof(double), 1, outf);
 										fread(&pos_host[i].y, sizeof(double), 1, outf);
@@ -514,7 +514,7 @@ int main(int argc, char * argv[])
         	fread(&Ndm, sizeof(int), 1, outf);
           fread(&t, sizeof(double), 1, outf);
 					n0=0;
-					for(k=0; k<M_glx; k++){													
+					for(k=0; k<M_glx; k++){
            		for (i = n0+Ns; i < n0+Ns+N_dm[k]; i++) {
                   fread(&pos_host[i].x, sizeof(double), 1, outf);
                   fread(&pos_host[i].y, sizeof(double), 1, outf);
@@ -591,7 +591,7 @@ int main(int argc, char * argv[])
                 vel_host[i].x = Vx_glx[k] + vel_host[i].x*cos(alpha_glx[k]) + vel_host[i].z*sin(alpha_glx[k]);;
                 vel_host[i].y += Vy_glx[k];
                 vel_host[i].z = Vz_glx[k] + vel_host[i].z*cos(alpha_glx[k]) - vel_host[i].x*sin(alpha_glx[k]);
-								eps2_p[i] = eps_dm[k]*eps_dm[k];														
+								eps2_p[i] = eps_dm[k]*eps_dm[k];
               }
             fclose(outf);
           }
@@ -657,20 +657,10 @@ int main(int argc, char * argv[])
 	for (i = 0; i < nGPU; i++){
 		cudaSetDevice(deviceId[i]);
 		for (j = 0; j < nGPU; j++){
-			if (j != i) 
-			{
-				ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
-				cudaDeviceSynchronize();
-        PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
-        cudaDeviceSynchronize();
-			}
-			else 
-      {
-        ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
-				cudaDeviceSynchronize();
-        PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
-        cudaDeviceSynchronize();
-      }
+			ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
+			cudaDeviceSynchronize();
+      PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
+      cudaDeviceSynchronize();
 		}
 	}
   #pragma omp barrier
@@ -686,7 +676,7 @@ if(it==1){
 	printf("***Start result t=0***\n");
 	result(pos_host, vel_host, mass_host, 0, 0.0, PSI_host, 0);
  }
-  
+
   cudaSetDevice(deviceId[0]);
   cudaEventCreate(&start1);
 	cudaEventCreate(&stop1);
@@ -724,15 +714,8 @@ if(it==1){
 		for (i = 0; i < nGPU; i++){
 			cudaSetDevice(deviceId[i]);
 			for (j = 0; j < nGPU; j++){
-				if (j != i)
-				{
-					ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_devt[i], post_dev[i], post_dev[j], mass_dev[j], eps2_dev[j]);
-          cudaDeviceSynchronize();
-				}
-				else {
-					ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_devt[i], post_dev[i], post_dev[i], mass_dev[i], eps2_dev[i]);
-        	cudaDeviceSynchronize();
-				}
+				ACCEL << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(ACC_devt[i], post_dev[i], post_dev[j], mass_dev[j], eps2_dev[j]);
+        cudaDeviceSynchronize();
 			}
 		}
     #pragma omp barrier
@@ -763,6 +746,7 @@ if(it==1){
 			//Copy data GPU to CPU
     #pragma omp parallel num_threads(nGPU) default(shared)
     {
+			#pragma omp for schedule(static,1) private(i)
       for (i = 0; i < nGPU; i++){
 		    cudaSetDevice(deviceId[i]);
 		    PSI_Zero << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i]);
@@ -773,16 +757,8 @@ if(it==1){
 	    for (i = 0; i < nGPU; i++){
 		    cudaSetDevice(deviceId[i]);
 		    for (j = 0; j < nGPU; j++){
-			    if (j != i) 
-			    {
-            PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
-            cudaDeviceSynchronize();
-			    }
-			    else 
-          {
-            PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[i], mass_dev[i], eps2_dev[i]);
-            cudaDeviceSynchronize();
-          }
+        	PSI_kernel << <Nk / BLOCK_SIZE, BLOCK_SIZE >> >(PSI_dev[i], pos_dev[i], pos_dev[j], mass_dev[j], eps2_dev[j]);
+          cudaDeviceSynchronize();
 		    }
 	    }
       #pragma omp barrier
@@ -827,7 +803,7 @@ if(it==1){
 			result(pos_host, vel_host, mass_host, it, t, PSI_host, it*itt);
 
 			tsave += dtsave; it++;
-			itt = 0; ittg = 0; 
+			itt = 0; ittg = 0;
 			it_grav = 0;
 			cudaEventRecord(start, 0);
 			gpuTime_GFC = 0.0; gpuTime_US = 0.0;
