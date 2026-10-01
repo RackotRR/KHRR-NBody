@@ -367,7 +367,7 @@ int main(int argc, char * argv[])
 	//-----Unitial State---------------------------------------------------------
 	real tmax, t = 0.0, tsave, dtsave, dtgrav=0.001,tgrav;
 	real Mh, a, Rh, Mb, b, Rb, eps2;
-	int Ns, i_cont, NN, Ndm, n0;
+	int Ns = 0, i_cont, NN, Ndm = 0, n0;
 	real K_m, K_r;
 	int *N_s, *N_dm, M_glx, k, k_glx;
 	double *Mass_s, *Mass_dm, *mp_s, *mp_dm, *X_glx, *Y_glx, *Z_glx, *Vx_glx, *Vy_glx, *Vz_glx, *alpha_glx, *eps_s , *eps_dm;
